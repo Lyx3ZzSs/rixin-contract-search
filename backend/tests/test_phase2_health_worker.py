@@ -25,7 +25,9 @@ def test_sanitizer_handles_freeform_secrets_and_malformed_urls():
         "api_key=freeform-key Authorization: Bearer bearer-token "
         "Authorization: Basic basic-secret "
         "password=plain-password secret: plain-secret token plain-token "
+        'api_key="secret value" password: "plain secret" client_secret=\'quoted secret\' '
         "client_secret=client-secret refresh_token=refresh-secret auth_token=auth-secret "
+        "raw sk-proj-abcdefghijklmnopqrstuvwxyz0123456789 and sk-abcdefghijklmnopqrstuvwxyz0123456789 "
         "callback https://qmd.example:bad/mcp?api_key=query-secret#fragment-secret"
     )
 
@@ -35,9 +37,17 @@ def test_sanitizer_handles_freeform_secrets_and_malformed_urls():
     assert "plain-password" not in payload
     assert "plain-secret" not in payload
     assert "plain-token" not in payload
+    assert "secret value" not in payload
+    assert "plain secret" not in payload
+    assert "quoted secret" not in payload
+    assert 'value"' not in payload
+    assert 'secret"' not in payload
+    assert "secret'" not in payload
     assert "client-secret" not in payload
     assert "refresh-secret" not in payload
     assert "auth-secret" not in payload
+    assert "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789" not in payload
+    assert "sk-abcdefghijklmnopqrstuvwxyz0123456789" not in payload
     assert "query-secret" not in payload
     assert "fragment-secret" not in payload
     assert "https://qmd.example/mcp" in payload

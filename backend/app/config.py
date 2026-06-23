@@ -13,11 +13,12 @@ URL_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s\"'<>]+")
 SECRET_ASSIGNMENT_PATTERN = re.compile(
     r"(?i)\b([A-Za-z0-9_-]*(?:api[_-]?key|token|key|secret|password|passwd|pwd|credential)[A-Za-z0-9_-]*)\b"
     r"(\s*[:=]\s*)"
-    r"([^\s,;]+)"
+    r"(\"[^\"]*\"|'[^']*'|[^\s,;]+)"
 )
 SECRET_WORD_PATTERN = re.compile(r"(?i)\b(token|password|secret|credential)\b(\s+)([^\s,;]+)")
 BEARER_PATTERN = re.compile(r"(?i)\bBearer\s+([^\s,;]+)")
 AUTH_HEADER_PATTERN = re.compile(r"(?i)\bAuthorization\s*:(?!\s*Bearer\b)\s*(?:[A-Za-z]+\s+)?[^\s,;]+")
+RAW_API_KEY_PATTERN = re.compile(r"\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b")
 
 
 def redact_url(value: str) -> str:
@@ -75,7 +76,8 @@ def sanitize_secret_string(value: str) -> str:
     sanitized = AUTH_HEADER_PATTERN.sub("Authorization: ***", sanitized)
     sanitized = BEARER_PATTERN.sub("Bearer ***", sanitized)
     sanitized = SECRET_ASSIGNMENT_PATTERN.sub(r"\1\2***", sanitized)
-    return SECRET_WORD_PATTERN.sub(r"\1\2***", sanitized)
+    sanitized = SECRET_WORD_PATTERN.sub(r"\1\2***", sanitized)
+    return RAW_API_KEY_PATTERN.sub("***", sanitized)
 
 
 def redact_url_match(match: re.Match[str]) -> str:
