@@ -219,4 +219,25 @@ describe('buildTaskActivity', () => {
 
     expect(activity.stages.find((stage) => stage.key === 'complete')?.state).toBe('failed');
   });
+
+  it('infers failed snapshot stage from latest event evidence when current stage is terminal failed', () => {
+    const activity = buildTaskActivity(null, [
+      event('qmd_retrieved', { query_text: 'GPU服务器采购', candidate_count: 3 }, 1),
+      event('document_classified', { document_path: 'equipment.md', decision: 'uncertain' }, 2),
+      event('snapshot', { status: 'failed', current_stage: 'failed', progress_percent: 90 }, 3)
+    ]);
+
+    expect(activity.stages.find((stage) => stage.key === 'classify')?.state).toBe('failed');
+    expect(activity.stages.find((stage) => stage.key === 'complete')?.state).toBe('pending');
+  });
+
+  it('prefers explicit non-terminal snapshot failed stage over event evidence', () => {
+    const activity = buildTaskActivity(null, [
+      event('document_classified', { document_path: 'equipment.md', decision: 'uncertain' }, 1),
+      event('snapshot', { status: 'failed', stage: 'retrieving', current_stage: 'failed', progress_percent: 90 }, 2)
+    ]);
+
+    expect(activity.stages.find((stage) => stage.key === 'retrieve')?.state).toBe('failed');
+    expect(activity.stages.find((stage) => stage.key === 'classify')?.state).toBe('pending');
+  });
 });

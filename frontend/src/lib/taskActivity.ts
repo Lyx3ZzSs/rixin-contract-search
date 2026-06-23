@@ -109,11 +109,11 @@ function activeStageKey(summary: TaskSummary | null, events: StreamEvent[]): Tas
 function failedStageKey(summary: TaskSummary | null, events: StreamEvent[]): TaskStageKey | null {
   const failureKeys = events
     .filter((event) => event.type === 'task_failed')
-    .map((event) => backendStageKey(payloadString(event.payload, 'stage')))
+    .map((event) => nonTerminalStageKey(event.payload.stage))
     .filter((key): key is TaskStageKey => Boolean(key));
   const failedSnapshotKeys = events
     .filter((event) => snapshotStatus(event) === 'failed')
-    .map((event) => backendStageKey(event.payload.stage) || backendStageKey(event.payload.current_stage))
+    .map((event) => nonTerminalStageKey(event.payload.stage) || nonTerminalStageKey(event.payload.current_stage))
     .filter((key): key is TaskStageKey => Boolean(key));
 
   if (failureKeys.length > 0) return maxStageKey(failureKeys);
@@ -156,6 +156,11 @@ function maxStageKey(keys: TaskStageKey[]): TaskStageKey {
 
 function backendStageKey(stage: unknown): TaskStageKey | null {
   return typeof stage === 'string' ? SUMMARY_STAGE[stage.toLowerCase()] || null : null;
+}
+
+function nonTerminalStageKey(stage: unknown): TaskStageKey | null {
+  const key = backendStageKey(stage);
+  return key && key !== 'complete' ? key : null;
 }
 
 function snapshotStatus(event: StreamEvent): string {
