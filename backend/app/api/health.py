@@ -2,7 +2,7 @@ from typing import Any
 
 from fastapi import APIRouter
 
-from app.config import settings
+from app.config import redact_url, settings
 from app.services.retrieval.qmd_client import QmdClient, QmdUnavailable
 
 router = APIRouter()
@@ -21,13 +21,13 @@ def qmd_status() -> dict[str, object]:
     except QmdUnavailable as exc:
         return {
             "available": False,
-            "error": {"type": "qmd_unavailable", "message": str(exc)},
+            "error": {"type": "qmd_unavailable", "message": redact_qmd_error_message(exc)},
             "configured_collections": [{"name": name, "exists": False, "document_count": None} for name in expected],
         }
     except Exception as exc:
         return {
             "available": False,
-            "error": {"type": "qmd_status_error", "message": str(exc)},
+            "error": {"type": "qmd_status_error", "message": redact_qmd_error_message(exc)},
             "configured_collections": [{"name": name, "exists": False, "document_count": None} for name in expected],
         }
 
@@ -35,7 +35,7 @@ def qmd_status() -> dict[str, object]:
     return {
         "available": True,
         "backend": settings.QMD_BACKEND,
-        "url": settings.QMD_MCP_URL,
+        "url": redact_url(settings.QMD_MCP_URL),
         "configured_collections": [
             {
                 "name": name,
@@ -63,8 +63,12 @@ def indexed_collections(status: dict[str, Any]) -> dict[str, int | None]:
     return indexed
 
 
+def redact_qmd_error_message(exc: Exception) -> str:
+    return str(exc).replace(settings.QMD_MCP_URL, redact_url(settings.QMD_MCP_URL))
+
+
 def collection_document_count(collection: dict[str, Any]) -> int | None:
-    for key in ("document_count", "count", "documents", "doc_count"):
+    for key in ("document_count", "count", "documents", "doc_count", "files"):
         value = collection.get(key)
         if isinstance(value, int):
             return value

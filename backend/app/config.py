@@ -1,11 +1,37 @@
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PROJECT_ENV_FILE = PROJECT_ROOT / ".env"
+SENSITIVE_QUERY_MARKERS = ("token", "key", "secret", "password", "pwd", "auth", "credential")
+
+
+def redact_url(value: str) -> str:
+    parsed = urlsplit(value)
+    netloc = parsed.netloc
+    if parsed.username is not None:
+        host = parsed.hostname or ""
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        port = f":{parsed.port}" if parsed.port is not None else ""
+        if parsed.password is None:
+            netloc = f"***@{host}{port}"
+        else:
+            netloc = f"{parsed.username}:***@{host}{port}"
+
+    query = urlencode(
+        [
+            (key, "***" if any(marker in key.lower() for marker in SENSITIVE_QUERY_MARKERS) else query_value)
+            for key, query_value in parse_qsl(parsed.query, keep_blank_values=True)
+        ],
+        doseq=True,
+        safe="*",
+    )
+    return urlunsplit((parsed.scheme, netloc, parsed.path, query, parsed.fragment))
 
 
 class Settings(BaseSettings):
@@ -160,10 +186,10 @@ class Settings(BaseSettings):
             },
             "qmd": {
                 "backend": self.QMD_BACKEND,
-                "url": self.QMD_MCP_URL,
+                "url": redact_url(self.QMD_MCP_URL),
                 "collections": [item.strip() for item in self.QMD_COLLECTIONS.split(",") if item.strip()],
             },
-            "redis": {"url": self.REDIS_URL},
+            "redis": {"url": redact_url(self.REDIS_URL)},
             "worker": {"mode": self.RQ_WORKER_MODE},
         }
 
