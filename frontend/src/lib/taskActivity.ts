@@ -75,7 +75,7 @@ const SUMMARY_STAGE: Partial<Record<string, TaskStageKey>> = {
 };
 
 export function buildTaskActivity(summary: TaskSummary | null, events: StreamEvent[]): TaskActivity {
-  const completed = summary?.status === 'completed' || events.some((event) => event.type === 'task_completed');
+  const completed = summary?.status === 'completed' || events.some((event) => event.type === 'task_completed' || snapshotStatus(event) === 'completed');
   const evidenceKeys = eventEvidenceKeys(events);
   const evidenceSet = new Set(evidenceKeys);
   const failedKey = completed ? null : failedStageKey(summary, events);
@@ -111,9 +111,14 @@ function failedStageKey(summary: TaskSummary | null, events: StreamEvent[]): Tas
     .filter((event) => event.type === 'task_failed')
     .map((event) => backendStageKey(payloadString(event.payload, 'stage')))
     .filter((key): key is TaskStageKey => Boolean(key));
+  const failedSnapshotKeys = events
+    .filter((event) => snapshotStatus(event) === 'failed')
+    .map((event) => backendStageKey(event.payload.stage) || backendStageKey(event.payload.current_stage))
+    .filter((key): key is TaskStageKey => Boolean(key));
 
   if (failureKeys.length > 0) return maxStageKey(failureKeys);
-  if (summary?.status !== 'failed' && !events.some((event) => event.type === 'task_failed')) return null;
+  if (failedSnapshotKeys.length > 0) return maxStageKey(failedSnapshotKeys);
+  if (summary?.status !== 'failed' && !events.some((event) => event.type === 'task_failed' || snapshotStatus(event) === 'failed')) return null;
   const progressKeys = [...eventEvidenceKeys(events), ...stageHintKeys(summary, events, false)];
   if (progressKeys.length > 0) return maxStageKey(progressKeys);
   return 'complete';
@@ -151,6 +156,10 @@ function maxStageKey(keys: TaskStageKey[]): TaskStageKey {
 
 function backendStageKey(stage: unknown): TaskStageKey | null {
   return typeof stage === 'string' ? SUMMARY_STAGE[stage.toLowerCase()] || null : null;
+}
+
+function snapshotStatus(event: StreamEvent): string {
+  return event.type === 'snapshot' ? payloadString(event.payload, 'status').toLowerCase() : '';
 }
 
 function activityText(event: StreamEvent): string {

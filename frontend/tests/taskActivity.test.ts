@@ -200,4 +200,23 @@ describe('buildTaskActivity', () => {
     expect(activity.stages.find((stage) => stage.key === 'classify')?.state).toBe('active');
     expect(activity.stages.find((stage) => stage.key === 'retrieve')?.state).not.toBe('active');
   });
+
+  it('marks all stages done for completed snapshots when summary is unavailable', () => {
+    const activity = buildTaskActivity(null, [event('snapshot', { status: 'completed', current_stage: 'completed', progress_percent: 100 }, 1)]);
+
+    expect(activity.stages.every((stage) => stage.state === 'done')).toBe(true);
+  });
+
+  it('marks failed stage from failed snapshots when summary is unavailable', () => {
+    const activity = buildTaskActivity(null, [event('snapshot', { status: 'failed', current_stage: 'retrieving', progress_percent: 35 }, 1)]);
+
+    expect(activity.stages.find((stage) => stage.key === 'retrieve')?.state).toBe('failed');
+    expect(activity.stages.find((stage) => stage.key === 'complete')?.state).toBe('pending');
+  });
+
+  it('falls back to complete stage for failed snapshots without a stage hint', () => {
+    const activity = buildTaskActivity(null, [event('snapshot', { status: 'failed', progress_percent: 35 }, 1)]);
+
+    expect(activity.stages.find((stage) => stage.key === 'complete')?.state).toBe('failed');
+  });
 });
