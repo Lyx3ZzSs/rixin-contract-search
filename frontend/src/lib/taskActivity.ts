@@ -76,20 +76,21 @@ const SUMMARY_STAGE: Partial<Record<string, TaskStageKey>> = {
 
 export function buildTaskActivity(summary: TaskSummary | null, events: StreamEvent[]): TaskActivity {
   const completed = summary?.status === 'completed' || events.some((event) => event.type === 'task_completed');
+  const evidenceKeys = eventEvidenceKeys(events);
+  const evidenceSet = new Set(evidenceKeys);
   const failedKey = completed ? null : failedStageKey(summary, events);
   const activeKey = failedKey || activeStageKey(summary, events);
-  const activeIndex = stageIndex(activeKey);
 
   return {
-    stages: STAGES.map((stage, index): TaskStage => {
+    stages: STAGES.map((stage): TaskStage => {
       if (completed) return { ...stage, state: 'done' };
       if (failedKey) {
-        if (index < activeIndex) return { ...stage, state: 'done' };
-        if (index === activeIndex) return { ...stage, state: 'failed' };
+        if (stage.key === failedKey) return { ...stage, state: 'failed' };
+        if (stageIndex(stage.key) < stageIndex(failedKey) && evidenceSet.has(stage.key)) return { ...stage, state: 'done' };
         return { ...stage, state: 'pending' };
       }
-      if (index < activeIndex) return { ...stage, state: 'done' };
-      if (index === activeIndex) return { ...stage, state: 'active' };
+      if (stage.key === activeKey) return { ...stage, state: 'active' };
+      if (stageIndex(stage.key) < stageIndex(activeKey) && evidenceSet.has(stage.key)) return { ...stage, state: 'done' };
       return { ...stage, state: 'pending' };
     }),
     items: events.map((event) => ({
@@ -102,7 +103,7 @@ export function buildTaskActivity(summary: TaskSummary | null, events: StreamEve
 }
 
 function activeStageKey(summary: TaskSummary | null, events: StreamEvent[]): TaskStageKey {
-  return maxStageKey(stageKeysForProgress(summary, events, true));
+  return maxStageKey([...eventEvidenceKeys(events), ...stageHintKeys(summary, events, true)]);
 }
 
 function failedStageKey(summary: TaskSummary | null, events: StreamEvent[]): TaskStageKey | null {
@@ -113,26 +114,35 @@ function failedStageKey(summary: TaskSummary | null, events: StreamEvent[]): Tas
 
   if (failureKeys.length > 0) return maxStageKey(failureKeys);
   if (summary?.status !== 'failed' && !events.some((event) => event.type === 'task_failed')) return null;
-  const progressKeys = stageKeysForProgress(summary, events, false);
+  const progressKeys = [...eventEvidenceKeys(events), ...stageHintKeys(summary, events, false)];
   if (progressKeys.length > 0) return maxStageKey(progressKeys);
-  return backendStageKey(summary?.current_stage) || backendStageKey(summary?.status) || 'complete';
+  return 'complete';
 }
 
-function stageKeysForProgress(summary: TaskSummary | null, events: StreamEvent[], includeTerminalSummary: boolean): TaskStageKey[] {
+function eventEvidenceKeys(events: StreamEvent[]): TaskStageKey[] {
+  return events
+    .filter((event) => event.type !== 'task_failed' && event.type !== 'snapshot')
+    .map((event) => EVENT_STAGE[event.type])
+    .filter((key): key is TaskStageKey => Boolean(key));
+}
+
+function stageHintKeys(summary: TaskSummary | null, events: StreamEvent[], includeTerminalHints: boolean): TaskStageKey[] {
   const keys: TaskStageKey[] = [];
   const summaryStageKey = backendStageKey(summary?.current_stage);
   const summaryStatusKey = backendStageKey(summary?.status);
 
-  if (summaryStageKey && (includeTerminalSummary || summaryStageKey !== 'complete')) keys.push(summaryStageKey);
-  if (summaryStatusKey && (includeTerminalSummary || summaryStatusKey !== 'complete')) keys.push(summaryStatusKey);
+  if (summaryStageKey && (includeTerminalHints || summaryStageKey !== 'complete')) keys.push(summaryStageKey);
+  if (summaryStatusKey && (includeTerminalHints || summaryStatusKey !== 'complete')) keys.push(summaryStatusKey);
 
   for (const event of events) {
-    if (event.type === 'task_failed') continue;
-    const key = EVENT_STAGE[event.type];
-    if (key) keys.push(key);
+    if (event.type !== 'snapshot') continue;
+    const snapshotStageKey = backendStageKey(event.payload.current_stage);
+    const snapshotStatusKey = backendStageKey(event.payload.status);
+    if (snapshotStageKey && (includeTerminalHints || snapshotStageKey !== 'complete')) keys.push(snapshotStageKey);
+    if (snapshotStatusKey && (includeTerminalHints || snapshotStatusKey !== 'complete')) keys.push(snapshotStatusKey);
   }
 
-  return includeTerminalSummary && keys.length === 0 ? ['submit'] : keys;
+  return includeTerminalHints && keys.length === 0 ? ['submit'] : keys;
 }
 
 function maxStageKey(keys: TaskStageKey[]): TaskStageKey {
@@ -144,6 +154,7 @@ function backendStageKey(stage: unknown): TaskStageKey | null {
 }
 
 function activityText(event: StreamEvent): string {
+  if (event.type === 'snapshot') return snapshotText(event.payload);
   if (event.type === 'task_created') return '任务已创建';
   if (event.type === 'task_started') return '任务已开始';
   if (event.type === 'criteria_parsed') return `已解析 ${criteriaCount(event.payload)} 个筛选条件`;
@@ -155,6 +166,11 @@ function activityText(event: StreamEvent): string {
   if (event.type === 'task_completed') return '任务已生成结果';
   if (event.type === 'task_failed') return `任务失败：${payloadString(event.payload, 'message') || payloadString(event.payload, 'error_code') || 'unknown'}`;
   return event.type;
+}
+
+function snapshotText(payload: Record<string, unknown>): string {
+  const progress = payloadNumber(payload, 'progress_percent');
+  return progress > 0 ? `已同步任务状态：${progress}%` : '已同步任务状态';
 }
 
 function criteriaCount(payload: Record<string, unknown>): number {

@@ -104,9 +104,9 @@ describe('buildTaskActivity', () => {
     );
 
     expect(activity.stages.map((stage) => [stage.key, stage.state])).toEqual([
-      ['submit', 'done'],
-      ['plan', 'done'],
-      ['check', 'done'],
+      ['submit', 'pending'],
+      ['plan', 'pending'],
+      ['check', 'pending'],
       ['retrieve', 'failed'],
       ['classify', 'pending'],
       ['complete', 'pending']
@@ -150,6 +150,8 @@ describe('buildTaskActivity', () => {
 
     expect(activity.stages.find((stage) => stage.key === 'retrieve')?.state).toBe('done');
     expect(activity.stages.find((stage) => stage.key === 'classify')?.state).toBe('active');
+    expect(activity.stages.find((stage) => stage.key === 'plan')?.state).toBe('pending');
+    expect(activity.stages.find((stage) => stage.key === 'check')?.state).toBe('pending');
   });
 
   it('keeps unknown events as items without advancing stage progress', () => {
@@ -164,5 +166,38 @@ describe('buildTaskActivity', () => {
       }
     ]);
     expect(activity.stages.map((stage) => stage.state)).toEqual(['active', 'pending', 'pending', 'pending', 'pending', 'pending']);
+  });
+
+  it('does not mark missing intermediate stages done from summary alone when events exist', () => {
+    const activity = buildTaskActivity({ ...baseSummary, status: 'retrieving', current_stage: 'retrieving', progress_percent: 35 }, [event('task_started', {}, 1)]);
+
+    expect(activity.stages.map((stage) => [stage.key, stage.state])).toEqual([
+      ['submit', 'done'],
+      ['plan', 'pending'],
+      ['check', 'pending'],
+      ['retrieve', 'active'],
+      ['classify', 'pending'],
+      ['complete', 'pending']
+    ]);
+  });
+
+  it('uses snapshot stage and friendly activity text when summary is unavailable', () => {
+    const activity = buildTaskActivity(null, [event('snapshot', { current_stage: 'retrieving', status: 'retrieving', progress_percent: 35 }, 1)]);
+
+    expect(activity.items[0]).toMatchObject({
+      type: 'snapshot',
+      text: '已同步任务状态：35%'
+    });
+    expect(activity.stages.find((stage) => stage.key === 'retrieve')?.state).toBe('active');
+  });
+
+  it('does not let a snapshot regress later event evidence', () => {
+    const activity = buildTaskActivity(null, [
+      event('document_classified', { document_path: 'equipment.md', decision: 'included' }, 1),
+      event('snapshot', { current_stage: 'retrieving', status: 'retrieving', progress_percent: 35 }, 2)
+    ]);
+
+    expect(activity.stages.find((stage) => stage.key === 'classify')?.state).toBe('active');
+    expect(activity.stages.find((stage) => stage.key === 'retrieve')?.state).not.toBe('active');
   });
 });
