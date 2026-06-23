@@ -29,6 +29,7 @@ def test_sanitizer_handles_freeform_secrets_and_malformed_urls():
         '{"api_key":"json-secret"} {\'password\': \'single-json-secret\'} '
         "client_secret=client-secret refresh_token=refresh-secret auth_token=auth-secret "
         "raw sk-proj-abcdefghijklmnopqrstuvwxyz0123456789 and sk-abcdefghijklmnopqrstuvwxyz0123456789 "
+        '{"Authorization":"Basic json-basic-secret"} '
         "callback https://qmd.example:bad/mcp?api_key=query-secret#fragment-secret"
     )
 
@@ -51,6 +52,7 @@ def test_sanitizer_handles_freeform_secrets_and_malformed_urls():
     assert "auth-secret" not in payload
     assert "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789" not in payload
     assert "sk-abcdefghijklmnopqrstuvwxyz0123456789" not in payload
+    assert "json-basic-secret" not in payload
     assert "query-secret" not in payload
     assert "fragment-secret" not in payload
     assert "https://qmd.example/mcp" in payload
@@ -146,12 +148,12 @@ def test_qmd_status_reports_configured_collections_and_redacts_url(client, monke
     assert "qmd-password" not in response.text
     assert payload["url"] == "https://***@qmd.example/mcp"
     assert payload["collections"] == [
-        {"name": "company_docs", "exists": True, "document_count": 12},
-        {"name": "legal_docs", "exists": True, "document_count": 5},
+        {"name": "company_docs", "exists": True, "document_count": 12, "files": 12},
+        {"name": "legal_docs", "exists": True, "document_count": 5, "files": 5},
     ]
     assert payload["configured_collections"] == [
-        {"name": "company_docs", "exists": True, "document_count": 12},
-        {"name": "legal_docs", "exists": True, "document_count": 5},
+        {"name": "company_docs", "exists": True, "document_count": 12, "files": 12},
+        {"name": "legal_docs", "exists": True, "document_count": 5, "files": 5},
     ]
 
 
@@ -220,6 +222,9 @@ def test_qmd_status_recursively_sanitizes_upstream_payload_and_configured_key(cl
                     "source_url": "https://user:payload-password@qmd.example/source?token=payload-token#access_token=fragment-token",
                     "api_key": "payload-api-key",
                     "authorization": "Bearer payload-bearer",
+                    "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789": "key-name-secret",
+                    configured_key: "configured-key-name-secret",
+                    "redis://worker:redis-password@redis:6379/0": "dsn-key-secret",
                     "nested": [
                         {"secret": "payload-secret"},
                         f"https://qmd.example/raw?debug=payload-debug echoed {configured_key}",
@@ -241,12 +246,17 @@ def test_qmd_status_recursively_sanitizes_upstream_payload_and_configured_key(cl
     assert "payload-bearer" not in response.text
     assert "payload-secret" not in response.text
     assert "payload-debug" not in response.text
+    assert "key-name-secret" not in response.text
+    assert "configured-key-name-secret" not in response.text
+    assert "dsn-key-secret" not in response.text
+    assert "redis-password" not in response.text
     assert configured_key not in response.text
     assert "status" not in response.json()
     metadata = response.json()["upstream_status"]["metadata"]
     assert metadata["source_url"] == "https://***@qmd.example/source"
     assert metadata["api_key"] == "***"
     assert metadata["authorization"] == "***"
+    assert metadata["***"] == "***"
     assert metadata["nested"] == [{"secret": "***"}, "https://qmd.example/raw echoed ***"]
 
 

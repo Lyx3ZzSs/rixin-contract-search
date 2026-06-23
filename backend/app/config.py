@@ -16,6 +16,7 @@ SECRET_ASSIGNMENT_PATTERN = re.compile(
     r"(\1\s*[:=]\s*)"
     r"(\"[^\"]*\"|'[^']*'|[^\s,;]+)"
 )
+AUTH_ASSIGNMENT_PATTERN = re.compile(r"(?i)([\"']Authorization[\"']\s*[:=]\s*)(\"[^\"]*\"|'[^']*'|[^\s,;]+)")
 SECRET_WORD_PATTERN = re.compile(r"(?i)\b(token|password|secret|credential)\b(\s+)([^\s,;]+)")
 BEARER_PATTERN = re.compile(r"(?i)\bBearer\s+([^\s,;]+)")
 AUTH_HEADER_PATTERN = re.compile(r"(?i)\bAuthorization\s*:(?!\s*Bearer\b)\s*(?:[A-Za-z]+\s+)?[^\s,;]+")
@@ -54,10 +55,12 @@ def redact_url(value: str) -> str:
 
 def sanitize_secrets(value):
     if isinstance(value, dict):
-        return {
-            key: "***" if is_sensitive_key(key) else sanitize_secrets(item)
-            for key, item in value.items()
-        }
+        sanitized: dict[object, object] = {}
+        for key, item in value.items():
+            sanitized_key = sanitize_secret_key(key)
+            key_was_redacted = sanitized_key != key
+            sanitized[sanitized_key] = "***" if key_was_redacted or is_sensitive_key(key) else sanitize_secrets(item)
+        return sanitized
     if isinstance(value, list):
         return [sanitize_secrets(item) for item in value]
     if isinstance(value, tuple):
@@ -72,8 +75,18 @@ def is_sensitive_key(key: object) -> bool:
     return any(marker in normalized for marker in SENSITIVE_KEY_MARKERS)
 
 
+def sanitize_secret_key(key: object) -> object:
+    if not isinstance(key, str):
+        return key
+    sanitized = sanitize_secret_string(key)
+    if sanitized != key:
+        return "***"
+    return key
+
+
 def sanitize_secret_string(value: str) -> str:
     sanitized = URL_PATTERN.sub(redact_url_match, value)
+    sanitized = AUTH_ASSIGNMENT_PATTERN.sub(r"\1***", sanitized)
     sanitized = AUTH_HEADER_PATTERN.sub("Authorization: ***", sanitized)
     sanitized = BEARER_PATTERN.sub("Bearer ***", sanitized)
     sanitized = SECRET_ASSIGNMENT_PATTERN.sub(r"\1\2\3***", sanitized)

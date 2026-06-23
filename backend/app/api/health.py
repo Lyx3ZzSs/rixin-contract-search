@@ -16,7 +16,7 @@ def runtime_status() -> dict[str, object]:
 @router.get("/qmd/status")
 def qmd_status() -> dict[str, object]:
     expected = [item.strip() for item in settings.QMD_COLLECTIONS.split(",") if item.strip()]
-    unavailable_collections = [{"name": name, "exists": False, "document_count": None} for name in expected]
+    unavailable_collections = [{"name": name, "exists": False, "document_count": None, "files": None} for name in expected]
     try:
         status = QmdClient().status()
     except QmdUnavailable as exc:
@@ -40,6 +40,7 @@ def qmd_status() -> dict[str, object]:
             "name": name,
             "exists": name in available,
             "document_count": available.get(name),
+            "files": available.get(name),
         }
         for name in expected
     ]
