@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TaskProgressPage } from '../src/pages/TaskProgressPage';
 
@@ -83,6 +83,33 @@ const results = {
     excluded: []
   }
 };
+
+const taskTwoRunningSummary = {
+  task_id: 'task-2',
+  title: '第二个任务',
+  raw_query: '第二个任务',
+  status: 'retrieving',
+  progress_percent: 20,
+  current_stage: 'retrieving',
+  error_code: null,
+  error_message: null,
+  created_at: '2026-06-22T00:10:00Z',
+  updated_at: '2026-06-22T00:10:00Z',
+  completed_at: null,
+  counts: { documents: 0, included: 0, uncertain: 0, excluded: 0 }
+};
+
+function RouteSwitchHarness() {
+  const navigate = useNavigate();
+  return (
+    <>
+      <button type="button" onClick={() => navigate('/tasks/task-2')}>
+        切换到任务 2
+      </button>
+      <TaskProgressPage />
+    </>
+  );
+}
 
 describe('TaskProgressPage', () => {
   afterEach(() => {
@@ -180,5 +207,46 @@ describe('TaskProgressPage', () => {
         reviewer_name: '王五'
       })
     });
+  });
+
+  it('clears stale task detail state while switching task routes', async () => {
+    const user = userEvent.setup();
+    let resolveTaskTwoSummary!: (response: Response) => void;
+    const taskTwoSummaryPromise = new Promise<Response>((resolve) => {
+      resolveTaskTwoSummary = resolve;
+    });
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/screening-tasks/task-1') return Promise.resolve(jsonResponse(completedSummary));
+      if (url === '/api/screening-tasks/task-1/results') return Promise.resolve(jsonResponse(results));
+      if (url === '/api/screening-tasks/task-1/events') return Promise.resolve(streamResponse([]));
+      if (url === '/api/screening-tasks/task-2') return taskTwoSummaryPromise;
+      if (url === '/api/screening-tasks/task-2/events') return Promise.resolve(streamResponse([]));
+      return Promise.reject(new Error(`Unexpected URL ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <MemoryRouter initialEntries={['/tasks/task-1']}>
+        <Routes>
+          <Route path="/tasks/:taskId" element={<RouteSwitchHarness />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    await waitFor(() => expect(screen.getByText('采购合同')).toBeInTheDocument());
+    expect(screen.getByRole('link', { name: '导出 CSV' })).toHaveAttribute('href', '/api/screening-tasks/task-1/export.csv');
+    expect(screen.getByRole('button', { name: '保存复核' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '切换到任务 2' }));
+
+    await waitFor(() => expect(screen.queryByText('采购合同')).not.toBeInTheDocument());
+    expect(screen.queryByRole('link', { name: '导出 CSV' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '保存复核' })).not.toBeInTheDocument();
+    expect(screen.getByText('Agent 正在检索合同库')).toBeInTheDocument();
+
+    resolveTaskTwoSummary(jsonResponse(taskTwoRunningSummary));
+    await waitFor(() => expect(screen.getAllByText('第二个任务').length).toBeGreaterThanOrEqual(1));
+    expect(fetchMock).not.toHaveBeenCalledWith('/api/screening-tasks/task-2/results/result-1/review', expect.anything());
   });
 });

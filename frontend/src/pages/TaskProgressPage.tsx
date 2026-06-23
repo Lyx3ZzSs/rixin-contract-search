@@ -36,13 +36,21 @@ export function TaskProgressPage() {
     if (!taskId) return;
     const activeTaskId = taskId;
     let cancelled = false;
+    setSummary(null);
+    setResults(null);
+    setEvents([]);
+    setSelectedUri(null);
+    setDecisionFilter('all');
+    setReviewFilter('all');
+    setKeywordFilter('');
+    setError(null);
 
     async function loadInitial() {
       try {
         const nextSummary = await getTaskSummary(activeTaskId);
         if (cancelled) return;
         setSummary(nextSummary);
-        if (nextSummary.status === 'completed') await loadFinal(activeTaskId, cancelled);
+        if (nextSummary.status === 'completed') await loadFinal(activeTaskId, () => cancelled);
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : '加载任务失败');
       }
@@ -62,7 +70,7 @@ export function TaskProgressPage() {
         setError(err.message);
       },
       onComplete() {
-        void loadFinal(activeTaskId, cancelled);
+        void loadFinal(activeTaskId, () => cancelled);
       }
     });
 
@@ -72,9 +80,9 @@ export function TaskProgressPage() {
     };
   }, [taskId]);
 
-  async function loadFinal(id: string, cancelled: boolean) {
+  async function loadFinal(id: string, isCancelled: () => boolean) {
     const [nextSummary, nextResults] = await Promise.all([getTaskSummary(id), getTaskResults(id)]);
-    if (cancelled) return;
+    if (isCancelled()) return;
     setSummary(nextSummary);
     setResults(nextResults);
     const first = flattenResults(nextResults)[0];
@@ -86,14 +94,17 @@ export function TaskProgressPage() {
     setSelectedUri(result.document_uri);
   }
 
-  const activity = useMemo(() => buildTaskActivity(summary, events), [summary, events]);
-  const documents = useMemo(() => (results ? flattenResults(results) : []), [results]);
+  const visibleSummary = summary?.task_id === taskId ? summary : null;
+  const visibleResults = results?.task_id === taskId ? results : null;
+  const visibleEvents = useMemo(() => events.filter((event) => event.task_id === taskId), [events, taskId]);
+  const activity = useMemo(() => buildTaskActivity(visibleSummary, visibleEvents), [visibleSummary, visibleEvents]);
+  const documents = useMemo(() => (visibleResults ? flattenResults(visibleResults) : []), [visibleResults]);
   const filteredDocuments = useMemo(
     () => documents.filter((document) => matchesFilters(document, decisionFilter, reviewFilter, keywordFilter)),
     [documents, decisionFilter, keywordFilter, reviewFilter]
   );
   const selectedDocument = filteredDocuments.find((item) => item.document_uri === selectedUri) || filteredDocuments[0] || null;
-  const isCompleted = summary?.status === 'completed';
+  const isCompleted = visibleSummary?.status === 'completed';
 
   if (!taskId) {
     return <div className="agent-shell">缺少任务 ID</div>;
@@ -104,8 +115,8 @@ export function TaskProgressPage() {
       <header className="topbar">
         <div>
           <p className="eyebrow">TASK {taskId}</p>
-          <h1>{summary?.title || '合同筛选任务'}</h1>
-          <p className="topbar-subtitle">{summary?.raw_query || '正在加载任务信息'}</p>
+          <h1>{visibleSummary?.title || '合同筛选任务'}</h1>
+          <p className="topbar-subtitle">{visibleSummary?.raw_query || '正在加载任务信息'}</p>
         </div>
         <div className="topbar-actions">
           <Link className="ghost-button" to="/tasks">
@@ -144,13 +155,13 @@ export function TaskProgressPage() {
           <section className="side-card">
             <div className="card-heading">
               <h2>任务进度</h2>
-              <p>{summary?.current_stage || 'loading'}</p>
+              <p>{visibleSummary?.current_stage || 'loading'}</p>
             </div>
             <div className="progress-meter" data-testid="event-progress">
-              <span style={{ width: `${summary?.progress_percent ?? 0}%` }} />
+              <span style={{ width: `${visibleSummary?.progress_percent ?? 0}%` }} />
             </div>
-            <strong>{summary?.progress_percent ?? 0}%</strong>
-            {error || summary?.status === 'failed' ? <p className="error-text">{error || summary?.error_message || '任务执行失败'}</p> : null}
+            <strong>{visibleSummary?.progress_percent ?? 0}%</strong>
+            {error || visibleSummary?.status === 'failed' ? <p className="error-text">{error || visibleSummary?.error_message || '任务执行失败'}</p> : null}
           </section>
 
           <section className="side-card">
@@ -164,7 +175,7 @@ export function TaskProgressPage() {
         </aside>
 
         <section className="panel-center">
-          <ResultSummary summary={summary} results={results} />
+          <ResultSummary summary={visibleSummary} results={visibleResults} />
           <section className="results-card">
             <div className="section-title-row">
               <h2>文件结果</h2>
@@ -198,7 +209,7 @@ export function TaskProgressPage() {
             <div className="result-list">
               {filteredDocuments.length === 0 ? (
                 <div className="empty-state">
-                  <strong>{documents.length ? '没有符合筛选条件的文档' : summary?.status === 'completed' ? '未找到符合条件的合同文件' : 'Agent 正在检索合同库'}</strong>
+                  <strong>{documents.length ? '没有符合筛选条件的文档' : visibleSummary?.status === 'completed' ? '未找到符合条件的合同文件' : 'Agent 正在检索合同库'}</strong>
                   <span>{documents.length ? '调整判断、复核状态或关键词后再查看。' : '完成后会在这里显示真实后端结果。'}</span>
                 </div>
               ) : (
