@@ -46,23 +46,48 @@ const EVENT_STAGE: Record<string, TaskStageKey> = {
 const SUMMARY_STAGE: Partial<Record<string, TaskStageKey>> = {
   uploaded: 'submit',
   parsing: 'submit',
+  submit: 'submit',
+  submitted: 'submit',
   parsed: 'plan',
+  plan: 'plan',
+  planning: 'plan',
+  criteria_parsed: 'plan',
   indexing: 'check',
   indexed: 'check',
+  check: 'check',
+  checking: 'check',
+  qmd_checking: 'check',
+  qmd_indexing: 'check',
+  qmd_indexed: 'check',
   retrieving: 'retrieve',
+  retrieve: 'retrieve',
+  retrieval: 'retrieve',
+  qmd_searching: 'retrieve',
+  qmd_retrieved: 'retrieve',
   classifying: 'classify',
+  classify: 'classify',
+  classification: 'classify',
+  document_classified: 'classify',
+  progress: 'classify',
   completed: 'complete',
+  complete: 'complete',
   failed: 'complete'
 };
 
 export function buildTaskActivity(summary: TaskSummary | null, events: StreamEvent[]): TaskActivity {
-  const activeKey = activeStageKey(summary, events);
+  const completed = summary?.status === 'completed' || events.some((event) => event.type === 'task_completed');
+  const failedKey = completed ? null : failedStageKey(summary, events);
+  const activeKey = failedKey || activeStageKey(summary, events);
   const activeIndex = stageIndex(activeKey);
 
   return {
     stages: STAGES.map((stage, index): TaskStage => {
-      if (summary?.status === 'completed') return { ...stage, state: 'done' };
-      if (summary?.status === 'failed' && index === activeIndex) return { ...stage, state: 'failed' };
+      if (completed) return { ...stage, state: 'done' };
+      if (failedKey) {
+        if (index < activeIndex) return { ...stage, state: 'done' };
+        if (index === activeIndex) return { ...stage, state: 'failed' };
+        return { ...stage, state: 'pending' };
+      }
       if (index < activeIndex) return { ...stage, state: 'done' };
       if (index === activeIndex) return { ...stage, state: 'active' };
       return { ...stage, state: 'pending' };
@@ -77,14 +102,45 @@ export function buildTaskActivity(summary: TaskSummary | null, events: StreamEve
 }
 
 function activeStageKey(summary: TaskSummary | null, events: StreamEvent[]): TaskStageKey {
-  if (summary?.status === 'completed' || summary?.status === 'failed') return 'complete';
+  return maxStageKey(stageKeysForProgress(summary, events, true));
+}
 
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const key = EVENT_STAGE[events[index].type];
-    if (key) return key;
+function failedStageKey(summary: TaskSummary | null, events: StreamEvent[]): TaskStageKey | null {
+  const failureKeys = events
+    .filter((event) => event.type === 'task_failed')
+    .map((event) => backendStageKey(payloadString(event.payload, 'stage')))
+    .filter((key): key is TaskStageKey => Boolean(key));
+
+  if (failureKeys.length > 0) return maxStageKey(failureKeys);
+  if (summary?.status !== 'failed' && !events.some((event) => event.type === 'task_failed')) return null;
+  const progressKeys = stageKeysForProgress(summary, events, false);
+  if (progressKeys.length > 0) return maxStageKey(progressKeys);
+  return backendStageKey(summary?.current_stage) || backendStageKey(summary?.status) || 'complete';
+}
+
+function stageKeysForProgress(summary: TaskSummary | null, events: StreamEvent[], includeTerminalSummary: boolean): TaskStageKey[] {
+  const keys: TaskStageKey[] = [];
+  const summaryStageKey = backendStageKey(summary?.current_stage);
+  const summaryStatusKey = backendStageKey(summary?.status);
+
+  if (summaryStageKey && (includeTerminalSummary || summaryStageKey !== 'complete')) keys.push(summaryStageKey);
+  if (summaryStatusKey && (includeTerminalSummary || summaryStatusKey !== 'complete')) keys.push(summaryStatusKey);
+
+  for (const event of events) {
+    if (event.type === 'task_failed') continue;
+    const key = EVENT_STAGE[event.type];
+    if (key) keys.push(key);
   }
 
-  return SUMMARY_STAGE[summary?.current_stage || summary?.status || ''] || 'submit';
+  return includeTerminalSummary && keys.length === 0 ? ['submit'] : keys;
+}
+
+function maxStageKey(keys: TaskStageKey[]): TaskStageKey {
+  return keys.reduce((current, key) => (stageIndex(key) > stageIndex(current) ? key : current), 'submit');
+}
+
+function backendStageKey(stage: unknown): TaskStageKey | null {
+  return typeof stage === 'string' ? SUMMARY_STAGE[stage.toLowerCase()] || null : null;
 }
 
 function activityText(event: StreamEvent): string {

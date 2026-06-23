@@ -90,4 +90,79 @@ describe('buildTaskActivity', () => {
     expect(activity.stages.find((stage) => stage.key === 'complete')?.state).toBe('failed');
     expect(activity.items.map((item) => item.text)).toContain('任务失败：Unable to reach qmd');
   });
+
+  it('marks the failed stage from task_failed payload stage', () => {
+    const activity = buildTaskActivity(
+      {
+        ...baseSummary,
+        status: 'failed',
+        current_stage: 'failed',
+        error_code: 'qmd_command_failed',
+        error_message: 'qmd command failed'
+      },
+      [event('task_failed', { stage: 'retrieving', error_code: 'qmd_command_failed', message: 'qmd command failed' }, 1)]
+    );
+
+    expect(activity.stages.map((stage) => [stage.key, stage.state])).toEqual([
+      ['submit', 'done'],
+      ['plan', 'done'],
+      ['check', 'done'],
+      ['retrieve', 'failed'],
+      ['classify', 'pending'],
+      ['complete', 'pending']
+    ]);
+  });
+
+  it('falls back to reached event stage when failed summary has no payload stage', () => {
+    const activity = buildTaskActivity(
+      {
+        ...baseSummary,
+        status: 'failed',
+        current_stage: 'failed',
+        error_code: 'worker_unexpected_error',
+        error_message: 'Unexpected worker error'
+      },
+      [
+        event('document_classified', { document_path: 'equipment.md', decision: 'uncertain' }, 1),
+        event('task_failed', { error_code: 'worker_unexpected_error', message: 'Unexpected worker error' }, 2)
+      ]
+    );
+
+    expect(activity.stages.find((stage) => stage.key === 'classify')?.state).toBe('failed');
+    expect(activity.stages.find((stage) => stage.key === 'complete')?.state).toBe('pending');
+  });
+
+  it('keeps active stage monotonic for duplicate or out-of-order events', () => {
+    const activity = buildTaskActivity(
+      { ...baseSummary, status: 'retrieving', current_stage: 'retrieving' },
+      [
+        event('document_classified', { document_uri: 'qmd://contracts/equipment.md', decision: 'uncertain' }, 1),
+        event('qmd_searching', { query_text: 'GPU服务器采购', condition_id: 'gpu' }, 2)
+      ]
+    );
+
+    expect(activity.stages.find((stage) => stage.key === 'retrieve')?.state).toBe('done');
+    expect(activity.stages.find((stage) => stage.key === 'classify')?.state).toBe('active');
+  });
+
+  it('uses summary stage as part of monotonic stage precedence', () => {
+    const activity = buildTaskActivity(baseSummary, [event('qmd_searching', { query_text: 'GPU服务器采购', condition_id: 'gpu' }, 1)]);
+
+    expect(activity.stages.find((stage) => stage.key === 'retrieve')?.state).toBe('done');
+    expect(activity.stages.find((stage) => stage.key === 'classify')?.state).toBe('active');
+  });
+
+  it('keeps unknown events as items without advancing stage progress', () => {
+    const activity = buildTaskActivity({ ...baseSummary, status: 'uploaded', progress_percent: 5, current_stage: 'uploaded' }, [event('custom_event', { value: 1 }, 1)]);
+
+    expect(activity.items).toEqual([
+      {
+        id: 'task-1:1',
+        type: 'custom_event',
+        text: 'custom_event',
+        timestamp: '2026-06-23T00:00:01Z'
+      }
+    ]);
+    expect(activity.stages.map((stage) => stage.state)).toEqual(['active', 'pending', 'pending', 'pending', 'pending', 'pending']);
+  });
 });
