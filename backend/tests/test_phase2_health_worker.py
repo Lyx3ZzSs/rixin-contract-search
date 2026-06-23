@@ -12,10 +12,29 @@ def test_url_redaction_masks_userinfo_token_passwords_and_sensitive_query_params
 
     assert (
         redact_url("https://qmd-token@qmd.example/mcp?access_token=secret&workspace=contracts")
-        == "https://***@qmd.example/mcp?access_token=***&workspace=***"
+        == "https://***@qmd.example/mcp"
     )
-    assert redact_url("https://api.example/v1#access_token=fragment-secret") == "https://api.example/v1#***"
+    assert redact_url("https://api.example/v1#access_token=fragment-secret") == "https://api.example/v1"
     assert redact_url("redis://worker:redis-password@redis:6379/0") == "redis://***@redis:6379/0"
+
+
+def test_sanitizer_handles_freeform_secrets_and_malformed_urls():
+    from app.config import sanitize_secrets
+
+    payload = sanitize_secrets(
+        "api_key=freeform-key Authorization: Bearer bearer-token "
+        "password=plain-password secret: plain-secret token plain-token "
+        "callback https://qmd.example:bad/mcp?api_key=query-secret#fragment-secret"
+    )
+
+    assert "freeform-key" not in payload
+    assert "bearer-token" not in payload
+    assert "plain-password" not in payload
+    assert "plain-secret" not in payload
+    assert "plain-token" not in payload
+    assert "query-secret" not in payload
+    assert "fragment-secret" not in payload
+    assert "https://qmd.example/mcp" in payload
 
 
 def test_runtime_status_redacts_llm_key_and_reports_worker_mode(client, monkeypatch):
@@ -49,9 +68,9 @@ def test_runtime_status_redacts_llm_key_and_reports_worker_mode(client, monkeypa
     assert "llm-password" not in response.text
     assert "llm-query-key" not in response.text
     assert "llm-fragment" not in response.text
-    assert payload["llm"]["base_url"] == "https://***@llm.example/v1?api_key=***#***"
+    assert payload["llm"]["base_url"] == "https://***@llm.example/v1"
     assert payload["redis"]["url"] == "redis://***@redis:6379/0"
-    assert payload["qmd"]["url"] == "https://qmd.example/mcp?token=***&workspace=***"
+    assert payload["qmd"]["url"] == "https://qmd.example/mcp"
 
 
 def test_qmd_status_reports_configured_collections_and_redacts_url(client, monkeypatch):
@@ -86,7 +105,7 @@ def test_qmd_status_reports_configured_collections_and_redacts_url(client, monke
     assert payload["available"] is True
     assert qmd_secret not in response.text
     assert "qmd-password" not in response.text
-    assert payload["url"] == "https://***@qmd.example/mcp?token=***&debug=***"
+    assert payload["url"] == "https://***@qmd.example/mcp"
     assert payload["configured_collections"] == [
         {"name": "company_docs", "exists": True, "document_count": 12},
         {"name": "legal_docs", "exists": True, "document_count": 5},
@@ -116,8 +135,31 @@ def test_qmd_status_redacts_url_secrets_from_unavailable_error(client, monkeypat
     assert "qmd-password" not in response.text
     assert "qmd-token" not in response.text
     assert response.json()["error"]["message"] == (
-        "qmd MCP returned empty response from https://***@qmd.example/mcp?token=***"
+        "qmd MCP returned empty response from https://***@qmd.example/mcp"
     )
+
+
+def test_qmd_status_sanitizes_structured_exception_args(client, monkeypatch):
+    from app import config
+    from app.api import health
+    from app.services.retrieval.qmd_client import QmdUnavailable
+
+    runtime_settings = Settings(AGENT_LLM_API_KEY="test-key")
+
+    class FakeQmdClient:
+        def status(self):
+            raise QmdUnavailable({"api_key": "payload-api-key", "detail": ["Authorization: Bearer payload-bearer"]})
+
+    monkeypatch.setattr(config, "settings", runtime_settings)
+    monkeypatch.setattr(health, "settings", runtime_settings)
+    monkeypatch.setattr(health, "QmdClient", FakeQmdClient)
+
+    response = client.get("/api/qmd/status")
+
+    assert response.status_code == 200
+    assert "payload-api-key" not in response.text
+    assert "payload-bearer" not in response.text
+    assert response.json()["error"]["message"] == "{'api_key': '***', 'detail': ['Authorization: Bearer ***']}"
 
 
 def test_qmd_status_recursively_sanitizes_upstream_payload(client, monkeypatch):
@@ -153,10 +195,10 @@ def test_qmd_status_recursively_sanitizes_upstream_payload(client, monkeypatch):
     assert "payload-secret" not in response.text
     assert "payload-debug" not in response.text
     metadata = response.json()["status"]["metadata"]
-    assert metadata["source_url"] == "https://***@qmd.example/source?token=***#***"
+    assert metadata["source_url"] == "https://***@qmd.example/source"
     assert metadata["api_key"] == "***"
     assert metadata["authorization"] == "***"
-    assert metadata["nested"] == [{"secret": "***"}, "https://qmd.example/raw?debug=***"]
+    assert metadata["nested"] == [{"secret": "***"}, "https://qmd.example/raw"]
 
 
 def test_worker_mode_defaults_to_simple_worker_on_macos_auto(monkeypatch):

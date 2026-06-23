@@ -1,7 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 import re
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -10,25 +10,44 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PROJECT_ENV_FILE = PROJECT_ROOT / ".env"
 SENSITIVE_KEY_MARKERS = ("token", "key", "secret", "password", "pwd", "auth", "credential")
 URL_PATTERN = re.compile(r"https?://[^\s\"'<>]+")
+SECRET_ASSIGNMENT_PATTERN = re.compile(
+    r"(?i)\b(api[_-]?key|access[_-]?token|token|password|passwd|pwd|secret|credential)\b"
+    r"(\s*[:=]\s*)"
+    r"([^\s,;]+)"
+)
+SECRET_WORD_PATTERN = re.compile(r"(?i)\b(token|password|secret|credential)\b(\s+)([^\s,;]+)")
+BEARER_PATTERN = re.compile(r"(?i)\bBearer\s+([^\s,;]+)")
+AUTH_HEADER_PATTERN = re.compile(r"(?i)\bAuthorization\s*:\s*(?!Bearer\b)([^\s,;]+)")
 
 
 def redact_url(value: str) -> str:
-    parsed = urlsplit(value)
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return "***"
     netloc = parsed.netloc
     if parsed.username is not None:
         host = parsed.hostname or ""
         if ":" in host and not host.startswith("["):
             host = f"[{host}]"
-        port = f":{parsed.port}" if parsed.port is not None else ""
+        try:
+            port_value = parsed.port
+        except ValueError:
+            port_value = None
+        port = f":{port_value}" if port_value is not None else ""
         netloc = f"***@{host}{port}"
+    elif parsed.netloc:
+        host = parsed.hostname or parsed.netloc.split(":", 1)[0]
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        try:
+            port_value = parsed.port
+        except ValueError:
+            port_value = None
+        port = f":{port_value}" if port_value is not None else ""
+        netloc = f"{host}{port}"
 
-    query = urlencode(
-        [(key, "***") for key, _ in parse_qsl(parsed.query, keep_blank_values=True)],
-        doseq=True,
-        safe="*",
-    )
-    fragment = "***" if parsed.fragment else ""
-    return urlunsplit((parsed.scheme, netloc, parsed.path, query, fragment))
+    return urlunsplit((parsed.scheme, netloc, parsed.path, "", ""))
 
 
 def sanitize_secrets(value):
@@ -52,7 +71,11 @@ def is_sensitive_key(key: object) -> bool:
 
 
 def sanitize_secret_string(value: str) -> str:
-    return URL_PATTERN.sub(redact_url_match, value)
+    sanitized = URL_PATTERN.sub(redact_url_match, value)
+    sanitized = BEARER_PATTERN.sub("Bearer ***", sanitized)
+    sanitized = AUTH_HEADER_PATTERN.sub("Authorization: ***", sanitized)
+    sanitized = SECRET_ASSIGNMENT_PATTERN.sub(r"\1\2***", sanitized)
+    return SECRET_WORD_PATTERN.sub(r"\1\2***", sanitized)
 
 
 def redact_url_match(match: re.Match[str]) -> str:

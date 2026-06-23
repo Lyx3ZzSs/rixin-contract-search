@@ -64,6 +64,10 @@ def indexed_collections(status: dict[str, Any]) -> dict[str, int | None]:
 
 
 def redact_qmd_error_message(exc: Exception) -> str:
+    if len(exc.args) == 1:
+        return str(sanitize_secrets(exc.args[0]))
+    if exc.args:
+        return str(sanitize_secrets(exc.args))
     return sanitize_secrets(str(exc))
 
 
