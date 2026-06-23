@@ -16,35 +16,40 @@ def runtime_status() -> dict[str, object]:
 @router.get("/qmd/status")
 def qmd_status() -> dict[str, object]:
     expected = [item.strip() for item in settings.QMD_COLLECTIONS.split(",") if item.strip()]
+    unavailable_collections = [{"name": name, "exists": False, "document_count": None} for name in expected]
     try:
         status = QmdClient().status()
     except QmdUnavailable as exc:
         return {
             "available": False,
             "error": {"type": "qmd_unavailable", "message": redact_qmd_error_message(exc)},
-            "configured_collections": [{"name": name, "exists": False, "document_count": None} for name in expected],
+            "collections": unavailable_collections,
+            "configured_collections": unavailable_collections,
         }
     except Exception as exc:
         return {
             "available": False,
             "error": {"type": "qmd_status_error", "message": redact_qmd_error_message(exc)},
-            "configured_collections": [{"name": name, "exists": False, "document_count": None} for name in expected],
+            "collections": unavailable_collections,
+            "configured_collections": unavailable_collections,
         }
 
     available = indexed_collections(status)
+    collections = [
+        {
+            "name": name,
+            "exists": name in available,
+            "document_count": available.get(name),
+        }
+        for name in expected
+    ]
     return {
         "available": True,
         "backend": settings.QMD_BACKEND,
         "url": redact_url(settings.QMD_MCP_URL),
-        "configured_collections": [
-            {
-                "name": name,
-                "exists": name in available,
-                "document_count": available.get(name),
-            }
-            for name in expected
-        ],
-        "status": sanitize_secrets(status),
+        "collections": collections,
+        "configured_collections": collections,
+        "upstream_status": sanitize_secrets(status),
     }
 
 

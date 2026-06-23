@@ -11,8 +11,9 @@ PROJECT_ENV_FILE = PROJECT_ROOT / ".env"
 SENSITIVE_KEY_MARKERS = ("token", "key", "secret", "password", "pwd", "auth", "credential")
 URL_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s\"'<>]+")
 SECRET_ASSIGNMENT_PATTERN = re.compile(
-    r"(?i)\b([A-Za-z0-9_-]*(?:api[_-]?key|token|key|secret|password|passwd|pwd|credential)[A-Za-z0-9_-]*)\b"
-    r"(\s*[:=]\s*)"
+    r"(?i)([\"']?)"
+    r"([A-Za-z0-9_-]*(?:api[_-]?key|token|key|secret|password|passwd|pwd|credential)[A-Za-z0-9_-]*)"
+    r"(\1\s*[:=]\s*)"
     r"(\"[^\"]*\"|'[^']*'|[^\s,;]+)"
 )
 SECRET_WORD_PATTERN = re.compile(r"(?i)\b(token|password|secret|credential)\b(\s+)([^\s,;]+)")
@@ -75,9 +76,18 @@ def sanitize_secret_string(value: str) -> str:
     sanitized = URL_PATTERN.sub(redact_url_match, value)
     sanitized = AUTH_HEADER_PATTERN.sub("Authorization: ***", sanitized)
     sanitized = BEARER_PATTERN.sub("Bearer ***", sanitized)
-    sanitized = SECRET_ASSIGNMENT_PATTERN.sub(r"\1\2***", sanitized)
+    sanitized = SECRET_ASSIGNMENT_PATTERN.sub(r"\1\2\3***", sanitized)
     sanitized = SECRET_WORD_PATTERN.sub(r"\1\2***", sanitized)
-    return RAW_API_KEY_PATTERN.sub("***", sanitized)
+    sanitized = RAW_API_KEY_PATTERN.sub("***", sanitized)
+    configured_key = configured_agent_llm_api_key()
+    if configured_key:
+        sanitized = sanitized.replace(configured_key, "***")
+    return sanitized
+
+
+def configured_agent_llm_api_key() -> str:
+    current_settings = globals().get("settings")
+    return str(getattr(current_settings, "AGENT_LLM_API_KEY", "") or "")
 
 
 def redact_url_match(match: re.Match[str]) -> str:

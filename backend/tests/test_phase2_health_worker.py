@@ -26,6 +26,7 @@ def test_sanitizer_handles_freeform_secrets_and_malformed_urls():
         "Authorization: Basic basic-secret "
         "password=plain-password secret: plain-secret token plain-token "
         'api_key="secret value" password: "plain secret" client_secret=\'quoted secret\' '
+        '{"api_key":"json-secret"} {\'password\': \'single-json-secret\'} '
         "client_secret=client-secret refresh_token=refresh-secret auth_token=auth-secret "
         "raw sk-proj-abcdefghijklmnopqrstuvwxyz0123456789 and sk-abcdefghijklmnopqrstuvwxyz0123456789 "
         "callback https://qmd.example:bad/mcp?api_key=query-secret#fragment-secret"
@@ -40,6 +41,8 @@ def test_sanitizer_handles_freeform_secrets_and_malformed_urls():
     assert "secret value" not in payload
     assert "plain secret" not in payload
     assert "quoted secret" not in payload
+    assert "json-secret" not in payload
+    assert "single-json-secret" not in payload
     assert 'value"' not in payload
     assert 'secret"' not in payload
     assert "secret'" not in payload
@@ -142,6 +145,10 @@ def test_qmd_status_reports_configured_collections_and_redacts_url(client, monke
     assert qmd_secret not in response.text
     assert "qmd-password" not in response.text
     assert payload["url"] == "https://***@qmd.example/mcp"
+    assert payload["collections"] == [
+        {"name": "company_docs", "exists": True, "document_count": 12},
+        {"name": "legal_docs", "exists": True, "document_count": 5},
+    ]
     assert payload["configured_collections"] == [
         {"name": "company_docs", "exists": True, "document_count": 12},
         {"name": "legal_docs", "exists": True, "document_count": 5},
@@ -198,11 +205,12 @@ def test_qmd_status_sanitizes_structured_exception_args(client, monkeypatch):
     assert response.json()["error"]["message"] == "{'api_key': '***', 'detail': ['Authorization: Bearer ***']}"
 
 
-def test_qmd_status_recursively_sanitizes_upstream_payload(client, monkeypatch):
+def test_qmd_status_recursively_sanitizes_upstream_payload_and_configured_key(client, monkeypatch):
     from app import config
     from app.api import health
 
-    runtime_settings = Settings(AGENT_LLM_API_KEY="test-key")
+    configured_key = "configured-opaque-key"
+    runtime_settings = Settings(AGENT_LLM_API_KEY=configured_key)
 
     class FakeQmdClient:
         def status(self):
@@ -212,7 +220,10 @@ def test_qmd_status_recursively_sanitizes_upstream_payload(client, monkeypatch):
                     "source_url": "https://user:payload-password@qmd.example/source?token=payload-token#access_token=fragment-token",
                     "api_key": "payload-api-key",
                     "authorization": "Bearer payload-bearer",
-                    "nested": [{"secret": "payload-secret"}, "https://qmd.example/raw?debug=payload-debug"],
+                    "nested": [
+                        {"secret": "payload-secret"},
+                        f"https://qmd.example/raw?debug=payload-debug echoed {configured_key}",
+                    ],
                 },
             }
 
@@ -230,11 +241,13 @@ def test_qmd_status_recursively_sanitizes_upstream_payload(client, monkeypatch):
     assert "payload-bearer" not in response.text
     assert "payload-secret" not in response.text
     assert "payload-debug" not in response.text
-    metadata = response.json()["status"]["metadata"]
+    assert configured_key not in response.text
+    assert "status" not in response.json()
+    metadata = response.json()["upstream_status"]["metadata"]
     assert metadata["source_url"] == "https://***@qmd.example/source"
     assert metadata["api_key"] == "***"
     assert metadata["authorization"] == "***"
-    assert metadata["nested"] == [{"secret": "***"}, "https://qmd.example/raw"]
+    assert metadata["nested"] == [{"secret": "***"}, "https://qmd.example/raw echoed ***"]
 
 
 def test_worker_mode_defaults_to_simple_worker_on_macos_auto(monkeypatch):
