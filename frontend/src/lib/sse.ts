@@ -18,7 +18,7 @@ export function subscribeTaskEvents({ taskId, onEvent, onError, onComplete }: Su
 }
 
 async function readTaskEvents(taskId: string, signal: AbortSignal, onEvent: (event: StreamEvent) => void, onComplete: () => void): Promise<void> {
-  const response = await fetch(`/api/screening-tasks/${taskId}/events`, { signal });
+  const response = await fetch(`/api/screening-tasks/${encodeURIComponent(taskId)}/events`, { signal });
   if (!response.ok || !response.body) {
     throw new Error(`Unable to subscribe task events: HTTP ${response.status}`);
   }

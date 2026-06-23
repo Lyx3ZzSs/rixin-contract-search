@@ -50,4 +50,26 @@ describe('subscribeTaskEvents', () => {
     expect(onError).not.toHaveBeenCalled();
     expect(events.map((event) => event.type)).toEqual(['progress', 'task_completed']);
   });
+
+  it('encodes reserved characters in the task events URL', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      streamResponse([
+        'id: task-1:1\nevent: task_completed\ndata: {"event_id":"task-1:1","type":"task_completed","task_id":"task-1/with?query#hash","timestamp":"2026-06-22T00:00:01Z","payload":{}}\n\n'
+      ])
+    );
+    const onComplete = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    subscribeTaskEvents({
+      taskId: 'task-1/with?query#hash',
+      onEvent() {},
+      onError() {},
+      onComplete
+    });
+
+    await vi.waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+    expect(fetchMock).toHaveBeenCalledWith('/api/screening-tasks/task-1%2Fwith%3Fquery%23hash/events', {
+      signal: expect.any(AbortSignal)
+    });
+  });
 });

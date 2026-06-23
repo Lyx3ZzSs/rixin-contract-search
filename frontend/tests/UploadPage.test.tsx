@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { UploadPage } from '../src/pages/UploadPage';
 
@@ -104,6 +104,30 @@ describe('UploadPage', () => {
     });
   });
 
+  it('encodes created task IDs before navigating to the detail route', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(qmdStatus))
+      .mockResolvedValueOnce(jsonResponse(runtimeStatus))
+      .mockResolvedValueOnce(jsonResponse({ task_id: 'task-1/with?query#hash' }));
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <Routes>
+          <Route path="/" element={<UploadPage />} />
+          <Route path="/tasks/:taskId" element={<LocationEcho />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    await user.type(screen.getByLabelText('筛选条件'), '合同总价');
+    await user.click(screen.getByRole('button', { name: '开始筛选' }));
+
+    expect(await screen.findByText('/tasks/task-1%2Fwith%3Fquery%23hash')).toBeInTheDocument();
+  });
+
   it('surfaces qmd unavailable backend errors from health status', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(jsonResponse(unavailableQmdStatus)).mockResolvedValueOnce(jsonResponse(runtimeStatus)));
 
@@ -117,3 +141,8 @@ describe('UploadPage', () => {
     expect(screen.getByText('0 文档 · 不可用')).toBeInTheDocument();
   });
 });
+
+function LocationEcho() {
+  const location = useLocation();
+  return <div>{location.pathname}</div>;
+}

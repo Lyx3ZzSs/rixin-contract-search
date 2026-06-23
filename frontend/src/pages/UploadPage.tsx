@@ -41,7 +41,7 @@ export function UploadPage() {
     setError(null);
     try {
       const task = await createScreeningTask({ query: trimmedQuery });
-      navigate(`/tasks/${task.task_id}`);
+      navigate(taskDetailPath(task.task_id));
     } catch (err) {
       setError(err instanceof Error ? err.message : '创建筛选任务失败');
     } finally {
@@ -163,6 +163,10 @@ function HealthSummary({ qmdStatus, runtimeStatus, error }: { qmdStatus: QmdStat
 
 function sanitizeStatusError(value: string): string {
   return value.trim();
+}
+
+function taskDetailPath(taskId: string): string {
+  return `/tasks/${encodeURIComponent(taskId)}`;
 }
 
 function CollectionRow({ collection }: { collection: QmdCollectionStatus }) {
