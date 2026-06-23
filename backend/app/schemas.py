@@ -4,7 +4,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from app.enums import ParseStatus, ResultDecision, TaskStatus
+from app.enums import ParseStatus, ResultDecision, ReviewStatus, TaskStatus
 
 
 class ErrorBody(BaseModel):
@@ -57,6 +57,11 @@ class TaskCounts(BaseModel):
     excluded: int
 
 
+class ReviewCounts(BaseModel):
+    unreviewed: int
+    reviewed: int
+
+
 class TaskSummaryResponse(BaseModel):
     task_id: UUID
     title: str
@@ -82,6 +87,7 @@ class EvidenceItem(BaseModel):
 
 
 class DocumentResultItem(BaseModel):
+    result_id: UUID
     document_uri: str
     document_path: str
     document_title: str | None = None
@@ -92,8 +98,24 @@ class DocumentResultItem(BaseModel):
     missing_conditions: list[str]
     evidence: list[EvidenceItem]
     confidence: float
+    review_status: ReviewStatus = ReviewStatus.unreviewed
+    review_decision: ResultDecision | None = None
+    review_note: str | None = None
+    reviewer_name: str | None = None
+    reviewed_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class ReviewResultRequest(BaseModel):
+    review_status: ReviewStatus
+    review_decision: ResultDecision | None = None
+    review_note: str | None = None
+    reviewer_name: str | None = None
+
+
+class ReviewResultResponse(BaseModel):
+    result: DocumentResultItem
 
 
 class ResultBuckets(BaseModel):

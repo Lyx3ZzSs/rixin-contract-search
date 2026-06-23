@@ -27,6 +27,16 @@ class ResultDecision(StrEnum):
     excluded = "excluded"
 
 
+class ReviewStatus(StrEnum):
+    unreviewed = "unreviewed"
+    reviewed = "reviewed"
+
+
+class WorkerMode(StrEnum):
+    simple = "simple"
+    fork = "fork"
+
+
 class ArtifactType(StrEnum):
     contract_markdown = "contract_markdown"
     page_markdown = "page_markdown"
@@ -45,7 +55,7 @@ class AuditEventType(StrEnum):
     qmd_query = "qmd_query"
     qmd_mapping_failed = "qmd_mapping_failed"
     classification_completed = "classification_completed"
+    result_reviewed = "result_reviewed"
     download = "download"
     permission_denied = "permission_denied"
     task_failed = "task_failed"
-

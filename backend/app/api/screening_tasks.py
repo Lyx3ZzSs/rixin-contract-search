@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.api.auth import AuthContext, get_auth
 from app.application.task_queue import enqueue_screening_task
 from app.db import get_session, utcnow
-from app.enums import AuditEventType, ResultDecision, TaskStatus
+from app.enums import AuditEventType, ResultDecision, ReviewStatus, TaskStatus
 from app.errors import ApiError
 from app.models import ScreeningDocumentResult, ScreeningTask, StreamEvent
 from app.schemas import (
@@ -85,6 +85,7 @@ def get_results(task_id: UUID, auth: AuthContext = Depends(get_auth), session: S
     results = session.scalars(select(ScreeningDocumentResult).where(ScreeningDocumentResult.task_id == task.id)).all()
     for result in results:
         item = DocumentResultItem(
+            result_id=result.id,
             document_uri=result.document_uri,
             document_path=result.document_path,
             document_title=result.document_title,
@@ -95,6 +96,11 @@ def get_results(task_id: UUID, auth: AuthContext = Depends(get_auth), session: S
             missing_conditions=result.missing_conditions,
             evidence=[EvidenceItem(**e) for e in result.evidence],
             confidence=result.confidence,
+            review_status=ReviewStatus(result.review_status),
+            review_decision=ResultDecision(result.review_decision) if result.review_decision else None,
+            review_note=result.review_note,
+            reviewer_name=result.reviewer_name,
+            reviewed_at=result.reviewed_at,
             created_at=result.created_at,
             updated_at=result.updated_at,
         )

@@ -130,6 +130,11 @@ class ScreeningDocumentResult(Base):
     missing_conditions: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     evidence: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     confidence: Mapped[float] = mapped_column(nullable=False)
+    review_status: Mapped[str] = mapped_column(String(32), nullable=False, default="unreviewed")
+    review_decision: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reviewer_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    reviewed_at: Mapped[object | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[object] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at: Mapped[object] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
 
@@ -138,6 +143,7 @@ class ScreeningDocumentResult(Base):
     __table_args__ = (
         UniqueConstraint("task_id", "document_uri", name="uq_document_results_task_document"),
         Index("ix_document_results_task_decision", "task_id", "decision"),
+        Index("ix_document_results_task_review", "task_id", "review_status"),
     )
 
 
