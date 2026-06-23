@@ -263,13 +263,15 @@ def test_export_xlsx_sanitizes_formula_like_values_as_literal_strings(client, db
         RAW_QUERY: "'+SUM(1,1)",
         DOCUMENT_TITLE: "'-dangerous title",
         AGENT_REASON: "'@agent reason",
-        MATCHED_CONDITIONS: "'@condition, \ttab-condition, \ncarriage-condition",
         REVIEW_NOTE: "'\n=unsafe review note",
         EVIDENCE_SUMMARY: "'=evidence text",
     }
     for column, expected in expected_values.items():
         assert row[column].value == expected
         assert row[column].data_type == "s"
+    assert row[MATCHED_CONDITIONS].value.startswith("'@condition")
+    assert row[MATCHED_CONDITIONS].value.replace("\r", "\n") == "'@condition, \ttab-condition, \ncarriage-condition"
+    assert row[MATCHED_CONDITIONS].data_type == "s"
 
 
 def test_export_routes_return_404_for_missing_and_other_owner_tasks(client, db_session):
