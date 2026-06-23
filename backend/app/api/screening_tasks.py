@@ -3,7 +3,7 @@ from time import monotonic
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
@@ -29,6 +29,7 @@ from app.schemas import (
     TaskSummaryResponse,
 )
 from app.services.audit import write_audit
+from app.services.exports import build_csv, build_json, build_xlsx
 from app.services.streaming import TERMINAL_EVENTS, append_stream_event, encode_sse, keepalive_sse, parse_last_event_id, snapshot_event
 
 router = APIRouter()
@@ -230,6 +231,35 @@ def review_result(
     return ReviewResultResponse(result=document_result_item(result))
 
 
+@router.get("/{task_id}/export.csv")
+def export_csv(task_id: UUID, auth: AuthContext = Depends(get_auth), session: Session = Depends(get_session)):
+    task = load_owned_task(session, task_id, auth)
+    results = load_task_results(session, task)
+    return Response(
+        build_csv(task, results),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="screening-{task.id}.csv"'},
+    )
+
+
+@router.get("/{task_id}/export.xlsx")
+def export_xlsx(task_id: UUID, auth: AuthContext = Depends(get_auth), session: Session = Depends(get_session)):
+    task = load_owned_task(session, task_id, auth)
+    results = load_task_results(session, task)
+    return Response(
+        build_xlsx(task, results),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="screening-{task.id}.xlsx"'},
+    )
+
+
+@router.get("/{task_id}/export.json")
+def export_json(task_id: UUID, auth: AuthContext = Depends(get_auth), session: Session = Depends(get_session)):
+    task = load_owned_task(session, task_id, auth)
+    results = load_task_results(session, task)
+    return JSONResponse(build_json(session, task, results))
+
+
 @router.get("/{task_id}/events")
 async def events(request: Request, task_id: UUID, auth: AuthContext = Depends(get_auth), session: Session = Depends(get_session)):
     task = load_owned_task(session, task_id, auth)
@@ -272,6 +302,14 @@ def load_owned_task(session: Session, task_id: UUID, auth: AuthContext) -> Scree
         session.commit()
         raise ApiError("not_found", "Not found", 404)
     return task
+
+
+def load_task_results(session: Session, task: ScreeningTask) -> list[ScreeningDocumentResult]:
+    return session.scalars(
+        select(ScreeningDocumentResult)
+        .where(ScreeningDocumentResult.task_id == task.id)
+        .order_by(ScreeningDocumentResult.decision.asc(), ScreeningDocumentResult.document_path.asc())
+    ).all()
 
 
 def task_summary(session: Session, task: ScreeningTask) -> TaskSummaryResponse:
