@@ -1,13 +1,38 @@
-import { FormEvent, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { createScreeningTask } from '../lib/api';
+import { FormEvent, useEffect, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { createScreeningTask, getQmdStatus, getRuntimeStatus } from '../lib/api';
+import type { QmdCollectionStatus, QmdStatus, RuntimeStatus } from '../lib/types';
 
 export function UploadPage() {
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [qmdStatus, setQmdStatus] = useState<QmdStatus | null>(null);
+  const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null);
+  const [healthError, setHealthError] = useState<string | null>(null);
   const trimmedQuery = query.trim();
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadHealth() {
+      try {
+        const [nextQmdStatus, nextRuntimeStatus] = await Promise.all([getQmdStatus(), getRuntimeStatus()]);
+        if (cancelled) return;
+        setQmdStatus(nextQmdStatus);
+        setRuntimeStatus(nextRuntimeStatus);
+      } catch (err) {
+        if (!cancelled) setHealthError(err instanceof Error ? err.message : '加载运行状态失败');
+      }
+    }
+
+    void loadHealth();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -63,12 +88,16 @@ export function UploadPage() {
             <button className="primary-button full-width" type="submit" disabled={!trimmedQuery || submitting}>
               {submitting ? '正在创建任务...' : '开始筛选'}
             </button>
+            <Link className="ghost-button full-width center-button" to="/tasks">
+              查看任务历史
+            </Link>
             {error ? <p className="error-text">{error}</p> : null}
             <p className="field-help">当前版本直接使用后端合同集合，不在页面上传文件。</p>
           </form>
         </aside>
 
         <section className="panel-center">
+          <HealthSummary qmdStatus={qmdStatus} runtimeStatus={runtimeStatus} error={healthError} />
           <section className="summary-card">
             <div>
               <p className="eyebrow">WORKFLOW</p>
@@ -90,5 +119,51 @@ export function UploadPage() {
         </section>
       </section>
     </main>
+  );
+}
+
+function HealthSummary({ qmdStatus, runtimeStatus, error }: { qmdStatus: QmdStatus | null; runtimeStatus: RuntimeStatus | null; error: string | null }) {
+  const configuredCollections = qmdStatus?.configured_collections?.length ? qmdStatus.configured_collections : qmdStatus?.collections || [];
+  const currentCollections = runtimeStatus?.qmd.collections.length ? runtimeStatus.qmd.collections : configuredCollections.map((collection) => collection.name);
+  return (
+    <section className="summary-card health-summary">
+      <div>
+        <p className="eyebrow">RUNTIME</p>
+        <h2>当前合同集合</h2>
+        <p>{currentCollections.length ? currentCollections.join('、') : '正在读取后端配置'}</p>
+        {error ? <p className="error-text compact">{error}</p> : null}
+      </div>
+      <div className="health-grid">
+        <section className="health-block" aria-label="合同集合状态">
+          <h3>配置集合</h3>
+          <div className="health-rows">
+            {configuredCollections.length ? (
+              configuredCollections.map((collection) => <CollectionRow collection={collection} key={collection.name} />)
+            ) : (
+              <span className="muted-row">等待 qmd 状态</span>
+            )}
+          </div>
+        </section>
+        <section className="health-block" aria-label="LLM 状态">
+          <h3>LLM</h3>
+          <div className="health-rows">
+            <span>
+              <strong>{runtimeStatus?.llm.model || '读取中'}</strong>
+              <em>{runtimeStatus?.llm.has_api_key ? '已配置' : '未配置'}</em>
+            </span>
+            <small>{runtimeStatus?.llm.base_url || '等待运行配置'}</small>
+          </div>
+        </section>
+      </div>
+    </section>
+  );
+}
+
+function CollectionRow({ collection }: { collection: QmdCollectionStatus }) {
+  return (
+    <span>
+      <strong>{collection.name}</strong>
+      <em>{collection.document_count} 文档 · {collection.exists ? '可用' : '不可用'}</em>
+    </span>
   );
 }
