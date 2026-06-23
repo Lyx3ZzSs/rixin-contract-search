@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TaskHistoryPage } from '../src/pages/TaskHistoryPage';
 
@@ -11,7 +11,7 @@ function jsonResponse(body: unknown): Response {
 const taskList = {
   items: [
     {
-      task_id: 'task-1',
+      task_id: 'task-1/with?query#hash',
       title: '采购合同筛选',
       raw_query: '合同总价超过100万元',
       status: 'completed',
@@ -67,14 +67,14 @@ describe('TaskHistoryPage', () => {
     expect(screen.getByText('completed')).toBeInTheDocument();
     expect(screen.getByText('3 文档 · 1 入选 · 1 待确认 · 1 不符合')).toBeInTheDocument();
     expect(screen.getByText('1 / 3 已复核')).toBeInTheDocument();
-    expect(screen.getAllByRole('link', { name: '查看详情' })[0]).toHaveAttribute('href', '/tasks/task-1');
+    expect(screen.getAllByRole('link', { name: '查看详情' })[0]).toHaveAttribute('href', '/tasks/task-1%2Fwith%3Fquery%23hash');
   });
 
   it('passes filters to the list API and navigates to copied task detail', async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith('/copy') && init?.method === 'POST') {
-        return Promise.resolve(jsonResponse({ task_id: 'task-copy', title: '复制任务', raw_query: '合同总价', status: 'uploaded', progress_percent: 0, events_url: '', results_url: '' }));
+        return Promise.resolve(jsonResponse({ task_id: 'task-copy/with?query#hash', title: '复制任务', raw_query: '合同总价', status: 'uploaded', progress_percent: 0, events_url: '', results_url: '' }));
       }
       return Promise.resolve(jsonResponse({ ...taskList, total: 1, items: [taskList.items[0]] }));
     });
@@ -85,7 +85,7 @@ describe('TaskHistoryPage', () => {
       <MemoryRouter initialEntries={['/tasks']}>
         <Routes>
           <Route path="/tasks" element={<TaskHistoryPage />} />
-          <Route path="/tasks/:taskId" element={<div>copied detail</div>} />
+          <Route path="/tasks/:taskId" element={<LocationEcho />} />
         </Routes>
       </MemoryRouter>
     );
@@ -102,8 +102,13 @@ describe('TaskHistoryPage', () => {
     await user.click(screen.getByRole('button', { name: '复制任务' }));
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith('/api/screening-tasks/task-1/copy', { method: 'POST' });
+      expect(fetchMock).toHaveBeenCalledWith('/api/screening-tasks/task-1%2Fwith%3Fquery%23hash/copy', { method: 'POST' });
     });
-    expect(await screen.findByText('copied detail')).toBeInTheDocument();
+    expect(await screen.findByText('/tasks/task-copy%2Fwith%3Fquery%23hash')).toBeInTheDocument();
   });
 });
+
+function LocationEcho() {
+  const location = useLocation();
+  return <div>{location.pathname}</div>;
+}

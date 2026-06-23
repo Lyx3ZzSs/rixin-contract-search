@@ -19,6 +19,14 @@ const qmdStatus = {
   ]
 };
 
+const unavailableQmdStatus = {
+  ...qmdStatus,
+  available: false,
+  error: 'qmd backend timeout: /internal/path?token=secret',
+  collections: [],
+  configured_collections: [{ name: 'contracts_prod', exists: false, document_count: 0, files: 0 }]
+};
+
 const runtimeStatus = {
   env_file: '.env',
   llm: {
@@ -94,5 +102,18 @@ describe('UploadPage', () => {
         body: JSON.stringify({ query: '合同总价' })
       });
     });
+  });
+
+  it('surfaces qmd unavailable backend errors from health status', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(jsonResponse(unavailableQmdStatus)).mockResolvedValueOnce(jsonResponse(runtimeStatus)));
+
+    render(
+      <MemoryRouter>
+        <UploadPage />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText('qmd backend timeout: /internal/path?token=secret')).toBeInTheDocument();
+    expect(screen.getByText('0 文档 · 不可用')).toBeInTheDocument();
   });
 });

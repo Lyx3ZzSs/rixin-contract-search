@@ -63,7 +63,7 @@ export function TaskHistoryPage() {
     setError(null);
     try {
       const copied = await copyScreeningTask(taskId);
-      navigate(`/tasks/${copied.task_id}`);
+      navigate(taskDetailPath(copied.task_id));
     } catch (err) {
       setError(err instanceof Error ? err.message : '复制任务失败');
     } finally {
@@ -167,7 +167,7 @@ function TaskHistoryRow({ task, copying, onCopy }: { task: TaskListItem; copying
         <strong>{reviewed} / {reviewTotal} 已复核</strong>
       </div>
       <div className="task-history-actions">
-        <Link className="ghost-button" to={`/tasks/${task.task_id}`}>
+        <Link className="ghost-button" to={taskDetailPath(task.task_id)}>
           查看详情
         </Link>
         <button className="mini-button" type="button" disabled={copying} onClick={onCopy}>
@@ -187,4 +187,8 @@ function formatDateTime(value: string): string {
     hour: '2-digit',
     minute: '2-digit'
   }).format(date);
+}
+
+function taskDetailPath(taskId: string): string {
+  return `/tasks/${encodeURIComponent(taskId)}`;
 }

@@ -125,6 +125,7 @@ export function UploadPage() {
 function HealthSummary({ qmdStatus, runtimeStatus, error }: { qmdStatus: QmdStatus | null; runtimeStatus: RuntimeStatus | null; error: string | null }) {
   const configuredCollections = qmdStatus?.configured_collections?.length ? qmdStatus.configured_collections : qmdStatus?.collections || [];
   const currentCollections = runtimeStatus?.qmd.collections.length ? runtimeStatus.qmd.collections : configuredCollections.map((collection) => collection.name);
+  const qmdError = qmdStatus && !qmdStatus.available && qmdStatus.error ? sanitizeStatusError(qmdStatus.error) : null;
   return (
     <section className="summary-card health-summary">
       <div>
@@ -132,6 +133,7 @@ function HealthSummary({ qmdStatus, runtimeStatus, error }: { qmdStatus: QmdStat
         <h2>当前合同集合</h2>
         <p>{currentCollections.length ? currentCollections.join('、') : '正在读取后端配置'}</p>
         {error ? <p className="error-text compact">{error}</p> : null}
+        {qmdError ? <p className="error-text compact">{qmdError}</p> : null}
       </div>
       <div className="health-grid">
         <section className="health-block" aria-label="合同集合状态">
@@ -157,6 +159,10 @@ function HealthSummary({ qmdStatus, runtimeStatus, error }: { qmdStatus: QmdStat
       </div>
     </section>
   );
+}
+
+function sanitizeStatusError(value: string): string {
+  return value.trim();
 }
 
 function CollectionRow({ collection }: { collection: QmdCollectionStatus }) {
