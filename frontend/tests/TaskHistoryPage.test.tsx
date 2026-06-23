@@ -106,6 +106,29 @@ describe('TaskHistoryPage', () => {
     });
     expect(await screen.findByText('/tasks/task-copy%2Fwith%3Fquery%23hash')).toBeInTheDocument();
   });
+
+  it('clears stale rows and shows only an error state when reload fails', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(taskList))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: 'history backend unavailable' }), { status: 503, headers: { 'Content-Type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter initialEntries={['/tasks']}>
+        <TaskHistoryPage />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText('采购合同筛选')).toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText('任务状态'), 'completed');
+
+    expect(await screen.findByText('history backend unavailable')).toBeInTheDocument();
+    expect(screen.queryByText('采购合同筛选')).not.toBeInTheDocument();
+    expect(screen.queryByText('暂无筛选任务')).not.toBeInTheDocument();
+  });
 });
 
 function LocationEcho() {

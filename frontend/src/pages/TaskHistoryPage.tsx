@@ -24,12 +24,13 @@ export function TaskHistoryPage() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [copyingTaskId, setCopyingTaskId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    setError(null);
+    setLoadError(null);
 
     async function loadTasks() {
       try {
@@ -43,8 +44,13 @@ export function TaskHistoryPage() {
         if (cancelled) return;
         setTasks(response.items);
         setTotal(response.total);
+        setLoadError(null);
       } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : '加载任务历史失败');
+        if (!cancelled) {
+          setTasks([]);
+          setTotal(0);
+          setLoadError(err instanceof Error ? err.message : '加载任务历史失败');
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -126,6 +132,11 @@ export function TaskHistoryPage() {
           {loading ? (
             <div className="empty-state">
               <strong>正在加载任务历史...</strong>
+            </div>
+          ) : loadError ? (
+            <div className="empty-state">
+              <strong>任务历史加载失败</strong>
+              <span>{loadError}</span>
             </div>
           ) : tasks.length === 0 ? (
             <div className="empty-state">
