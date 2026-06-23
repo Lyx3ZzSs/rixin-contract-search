@@ -6,6 +6,7 @@ import {
   exportTaskUrl,
   getQmdStatus,
   getRuntimeStatus,
+  getTaskResults,
   getTaskSummary,
   listScreeningTasks,
   reviewDocumentResult
@@ -58,6 +59,15 @@ describe('api client', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/screening-tasks?offset=0');
   });
 
+  it('preserves literal all in task search terms', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ items: [], total: 0, limit: 20, offset: 0 }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await listScreeningTasks({ status: 'all', q: 'all' });
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/screening-tasks?q=all');
+  });
+
   it('copies screening tasks', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ task_id: 'task-2' }), { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
@@ -90,6 +100,34 @@ describe('api client', () => {
     });
   });
 
+  it('encodes dynamic task and result path segments', async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ task_id: 'task 1' }), { status: 200 })));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await getTaskSummary('task 1/with/slash');
+    await getTaskResults('task 1/with/slash');
+    await copyScreeningTask('task 1/with/slash');
+    await reviewDocumentResult('task 1/with/slash', 'result 1/with/slash', {
+      review_status: 'reviewed',
+      review_decision: 'excluded',
+      reviewer_name: 'reviewer'
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/screening-tasks/task%201%2Fwith%2Fslash');
+    expect(fetchMock).toHaveBeenCalledWith('/api/screening-tasks/task%201%2Fwith%2Fslash/results');
+    expect(fetchMock).toHaveBeenCalledWith('/api/screening-tasks/task%201%2Fwith%2Fslash/copy', { method: 'POST' });
+    expect(fetchMock).toHaveBeenCalledWith('/api/screening-tasks/task%201%2Fwith%2Fslash/results/result%201%2Fwith%2Fslash/review', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        review_status: 'reviewed',
+        review_decision: 'excluded',
+        reviewer_name: 'reviewer'
+      })
+    });
+    expect(exportTaskUrl('task 1/with/slash', 'csv')).toBe('/api/screening-tasks/task%201%2Fwith%2Fslash/export.csv');
+  });
+
   it('builds export URLs and loads health statuses', async () => {
     const fetchMock = vi
       .fn()
@@ -118,5 +156,17 @@ describe('api client', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(listScreeningTasks({ status: 'completed' })).rejects.toThrow('Invalid task status filter');
+  });
+
+  it('throws string server error messages', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: 'qmd unavailable' }), {
+        status: 503,
+        headers: { 'Content-Type': 'application/json' }
+      })
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(getQmdStatus()).rejects.toThrow('qmd unavailable');
   });
 });
