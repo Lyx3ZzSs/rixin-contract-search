@@ -9,15 +9,15 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PROJECT_ENV_FILE = PROJECT_ROOT / ".env"
 SENSITIVE_KEY_MARKERS = ("token", "key", "secret", "password", "pwd", "auth", "credential")
-URL_PATTERN = re.compile(r"https?://[^\s\"'<>]+")
+URL_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s\"'<>]+")
 SECRET_ASSIGNMENT_PATTERN = re.compile(
-    r"(?i)\b(api[_-]?key|access[_-]?token|token|password|passwd|pwd|secret|credential)\b"
+    r"(?i)\b([A-Za-z0-9_-]*(?:api[_-]?key|token|key|secret|password|passwd|pwd|credential)[A-Za-z0-9_-]*)\b"
     r"(\s*[:=]\s*)"
     r"([^\s,;]+)"
 )
 SECRET_WORD_PATTERN = re.compile(r"(?i)\b(token|password|secret|credential)\b(\s+)([^\s,;]+)")
 BEARER_PATTERN = re.compile(r"(?i)\bBearer\s+([^\s,;]+)")
-AUTH_HEADER_PATTERN = re.compile(r"(?i)\bAuthorization\s*:\s*(?!Bearer\b)([^\s,;]+)")
+AUTH_HEADER_PATTERN = re.compile(r"(?i)\bAuthorization\s*:(?!\s*Bearer\b)\s*(?:[A-Za-z]+\s+)?[^\s,;]+")
 
 
 def redact_url(value: str) -> str:
@@ -72,8 +72,8 @@ def is_sensitive_key(key: object) -> bool:
 
 def sanitize_secret_string(value: str) -> str:
     sanitized = URL_PATTERN.sub(redact_url_match, value)
-    sanitized = BEARER_PATTERN.sub("Bearer ***", sanitized)
     sanitized = AUTH_HEADER_PATTERN.sub("Authorization: ***", sanitized)
+    sanitized = BEARER_PATTERN.sub("Bearer ***", sanitized)
     sanitized = SECRET_ASSIGNMENT_PATTERN.sub(r"\1\2***", sanitized)
     return SECRET_WORD_PATTERN.sub(r"\1\2***", sanitized)
 

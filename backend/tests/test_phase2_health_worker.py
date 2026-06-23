@@ -23,18 +23,44 @@ def test_sanitizer_handles_freeform_secrets_and_malformed_urls():
 
     payload = sanitize_secrets(
         "api_key=freeform-key Authorization: Bearer bearer-token "
+        "Authorization: Basic basic-secret "
         "password=plain-password secret: plain-secret token plain-token "
+        "client_secret=client-secret refresh_token=refresh-secret auth_token=auth-secret "
         "callback https://qmd.example:bad/mcp?api_key=query-secret#fragment-secret"
     )
 
     assert "freeform-key" not in payload
     assert "bearer-token" not in payload
+    assert "basic-secret" not in payload
     assert "plain-password" not in payload
     assert "plain-secret" not in payload
     assert "plain-token" not in payload
+    assert "client-secret" not in payload
+    assert "refresh-secret" not in payload
+    assert "auth-secret" not in payload
     assert "query-secret" not in payload
     assert "fragment-secret" not in payload
     assert "https://qmd.example/mcp" in payload
+
+
+def test_sanitizer_redacts_credentialed_non_http_dsns():
+    from app.config import sanitize_secrets
+
+    payload = sanitize_secrets(
+        "redis redis://worker:redis-password@redis:6379/0 "
+        "postgres postgresql://user:db-password@db/contracts "
+        "mysql mysql://user:mysql-password@mysql/contracts "
+        "mongo mongodb://user:mongo-password@mongo/contracts "
+        "amqp amqp://user:amqp-password@mq/vhost"
+    )
+
+    for secret in ("redis-password", "db-password", "mysql-password", "mongo-password", "amqp-password"):
+        assert secret not in payload
+    assert "redis://***@redis:6379/0" in payload
+    assert "postgresql://***@db/contracts" in payload
+    assert "mysql://***@mysql/contracts" in payload
+    assert "mongodb://***@mongo/contracts" in payload
+    assert "amqp://***@mq/vhost" in payload
 
 
 def test_runtime_status_redacts_llm_key_and_reports_worker_mode(client, monkeypatch):
