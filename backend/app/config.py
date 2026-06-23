@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     AGENT_LLM_MODEL: str = "gpt-4.1-mini"
     AGENT_LLM_TEMPERATURE: float = 0
     AGENT_MAX_RETRIEVAL_ROUNDS: int = 2
+    RQ_WORKER_MODE: str = "auto"
     MAX_UPLOAD_MB: int = 50
     MAX_FILES_PER_TASK: int = 5
     MAX_PAGES_PER_FILE: int = 200
@@ -97,6 +98,14 @@ class Settings(BaseSettings):
             raise ValueError("AGENT_LLM_MODEL must be a real OpenAI-compatible model name")
         return value
 
+    @field_validator("RQ_WORKER_MODE")
+    @classmethod
+    def validate_rq_worker_mode(cls, value: str) -> str:
+        value = value.strip()
+        if value not in {"auto", "simple", "fork"}:
+            raise ValueError("RQ_WORKER_MODE must be auto, simple, or fork")
+        return value
+
     @field_validator("PARSING_SERVICE_URL")
     @classmethod
     def validate_parsing_service_url(cls, value: str) -> str:
@@ -138,6 +147,25 @@ class Settings(BaseSettings):
         if not 1 <= self.SSE_KEEPALIVE_SECONDS <= 300:
             raise ValueError("SSE_KEEPALIVE_SECONDS must be between 1 and 300")
         return self
+
+    def redacted_runtime_status(self) -> dict[str, object]:
+        api_key = self.AGENT_LLM_API_KEY
+        return {
+            "env": {"file": str(self.model_config["env_file"])},
+            "llm": {
+                "base_url": self.AGENT_LLM_BASE_URL,
+                "model": self.AGENT_LLM_MODEL,
+                "has_api_key": bool(api_key),
+                "api_key_length": len(api_key),
+            },
+            "qmd": {
+                "backend": self.QMD_BACKEND,
+                "url": self.QMD_MCP_URL,
+                "collections": [item.strip() for item in self.QMD_COLLECTIONS.split(",") if item.strip()],
+            },
+            "redis": {"url": self.REDIS_URL},
+            "worker": {"mode": self.RQ_WORKER_MODE},
+        }
 
 
 @lru_cache

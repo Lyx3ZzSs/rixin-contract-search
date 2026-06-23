@@ -35,7 +35,7 @@ try:
     from fastapi import FastAPI
 
     from app.api.auth import ApiAuthMiddleware
-    from app.api import contracts, screening_tasks
+    from app.api import contracts, health, screening_tasks
     from app.errors import register_error_handlers
 except ModuleNotFoundError as exc:
     if exc.name in {"fastapi", "pydantic_settings", "sqlalchemy", "pydantic"}:
@@ -57,6 +57,7 @@ def create_app() -> FastAPI:
 
     app.include_router(screening_tasks.router, prefix="/api/screening-tasks", tags=["screening_tasks"])
     app.include_router(contracts.router, prefix="/api/contracts", tags=["contracts"])
+    app.include_router(health.router, prefix="/api", tags=["health"])
     return app
 
 
