@@ -31,6 +31,8 @@ EXPORT_COLUMNS = [
     "evidence_summary",
 ]
 
+DANGEROUS_SPREADSHEET_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
 
 def _value(value):
     if value is None:
@@ -40,6 +42,13 @@ def _value(value):
     if isinstance(value, list):
         return ", ".join(_value(item) for item in value)
     return str(value)
+
+
+def _spreadsheet_value(value):
+    text = _value(value)
+    if text.startswith(DANGEROUS_SPREADSHEET_PREFIXES):
+        return f"'{text}"
+    return text
 
 
 def evidence_summary(evidence):
@@ -88,11 +97,15 @@ def export_rows(task: ScreeningTask, results: list[ScreeningDocumentResult]):
     ]
 
 
+def spreadsheet_rows(task: ScreeningTask, results: list[ScreeningDocumentResult]):
+    return [{column: _spreadsheet_value(row[column]) for column in EXPORT_COLUMNS} for row in export_rows(task, results)]
+
+
 def build_csv(task: ScreeningTask, results: list[ScreeningDocumentResult]) -> str:
     output = io.StringIO()
     writer = csv.DictWriter(output, fieldnames=EXPORT_COLUMNS)
     writer.writeheader()
-    writer.writerows(export_rows(task, results))
+    writer.writerows(spreadsheet_rows(task, results))
     return output.getvalue()
 
 
@@ -101,7 +114,7 @@ def build_xlsx(task: ScreeningTask, results: list[ScreeningDocumentResult]) -> b
     worksheet = workbook.active
     worksheet.title = "Screening Results"
     worksheet.append(EXPORT_COLUMNS)
-    for row in export_rows(task, results):
+    for row in spreadsheet_rows(task, results):
         worksheet.append([row[column] for column in EXPORT_COLUMNS])
 
     output = io.BytesIO()
