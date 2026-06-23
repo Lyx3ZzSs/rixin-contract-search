@@ -31,7 +31,32 @@ EXPORT_COLUMNS = [
     "evidence_summary",
 ]
 
-DANGEROUS_SPREADSHEET_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+EXPORT_HEADER_LABELS = {
+    "task_id": "任务ID",
+    "task_title": "任务标题",
+    "raw_query": "原始问题",
+    "task_created_at": "任务创建时间",
+    "task_completed_at": "任务完成时间",
+    "document_uri": "文档URI",
+    "document_path": "文档路径",
+    "document_title": "文档标题",
+    "collection": "集合",
+    "agent_decision": "系统判定",
+    "agent_reason": "系统理由",
+    "confidence": "置信度",
+    "matched_conditions": "命中条件",
+    "missing_conditions": "缺失条件",
+    "review_status": "复核状态",
+    "review_decision": "复核判定",
+    "review_note": "复核备注",
+    "reviewer_name": "复核人",
+    "reviewed_at": "复核时间",
+    "evidence_summary": "证据摘要",
+}
+
+SPREADSHEET_HEADERS = [EXPORT_HEADER_LABELS[column] for column in EXPORT_COLUMNS]
+
+DANGEROUS_SPREADSHEET_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n")
 
 
 def _value(value):
@@ -70,13 +95,18 @@ def evidence_summary(evidence):
 
 
 def export_rows(task: ScreeningTask, results: list[ScreeningDocumentResult]):
+    task_values = {
+        "task_id": _value(task.id),
+        "task_title": _value(task.title),
+        "raw_query": _value(task.raw_query),
+        "task_created_at": _value(task.created_at),
+        "task_completed_at": _value(task.completed_at),
+    }
+    if not results:
+        return [{**task_values, **{column: "" for column in EXPORT_COLUMNS if column not in task_values}}]
     return [
         {
-            "task_id": _value(task.id),
-            "task_title": _value(task.title),
-            "raw_query": _value(task.raw_query),
-            "task_created_at": _value(task.created_at),
-            "task_completed_at": _value(task.completed_at),
+            **task_values,
             "document_uri": _value(result.document_uri),
             "document_path": _value(result.document_path),
             "document_title": _value(result.document_title),
@@ -98,12 +128,12 @@ def export_rows(task: ScreeningTask, results: list[ScreeningDocumentResult]):
 
 
 def spreadsheet_rows(task: ScreeningTask, results: list[ScreeningDocumentResult]):
-    return [{column: _spreadsheet_value(row[column]) for column in EXPORT_COLUMNS} for row in export_rows(task, results)]
+    return [{EXPORT_HEADER_LABELS[column]: _spreadsheet_value(row[column]) for column in EXPORT_COLUMNS} for row in export_rows(task, results)]
 
 
 def build_csv(task: ScreeningTask, results: list[ScreeningDocumentResult]) -> str:
     output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=EXPORT_COLUMNS)
+    writer = csv.DictWriter(output, fieldnames=SPREADSHEET_HEADERS)
     writer.writeheader()
     writer.writerows(spreadsheet_rows(task, results))
     return output.getvalue()
@@ -113,9 +143,9 @@ def build_xlsx(task: ScreeningTask, results: list[ScreeningDocumentResult]) -> b
     workbook = Workbook()
     worksheet = workbook.active
     worksheet.title = "Screening Results"
-    worksheet.append(EXPORT_COLUMNS)
+    worksheet.append(SPREADSHEET_HEADERS)
     for row in spreadsheet_rows(task, results):
-        worksheet.append([row[column] for column in EXPORT_COLUMNS])
+        worksheet.append([row[header] for header in SPREADSHEET_HEADERS])
 
     output = io.BytesIO()
     workbook.save(output)
@@ -133,6 +163,8 @@ def build_json(session: Session, task: ScreeningTask, results: list[ScreeningDoc
             "status": task.status,
             "current_stage": task.current_stage,
             "progress_percent": task.progress_percent,
+            "error_code": task.error_code,
+            "error_message": task.error_message,
             "metrics": task.metrics,
             "created_at": _value(task.created_at),
             "updated_at": _value(task.updated_at),
