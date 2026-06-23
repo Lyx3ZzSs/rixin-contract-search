@@ -95,7 +95,10 @@ h1 {
 
 .topbar-actions {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 12px;
+  justify-content: flex-end;
 }
 
 .primary-button,
@@ -166,7 +169,7 @@ h1 {
 
 .agent-status-strip {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 10px;
   margin-top: 18px;
   margin-bottom: 18px;
@@ -222,6 +225,23 @@ h1 {
 .agent-status-step.done span {
   background: var(--green);
   color: #fff;
+}
+
+.agent-status-step.failed {
+  background: var(--red-soft);
+  color: var(--red);
+}
+
+.agent-status-step.failed span {
+  background: var(--red);
+  color: #fff;
+}
+
+.export-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
 }
 
 .workspace {
@@ -539,6 +559,55 @@ h1 {
   font-size: 13px;
 }
 
+.result-filters {
+  display: grid;
+  grid-template-columns: 150px 150px minmax(180px, 1fr);
+  gap: 10px;
+  margin-bottom: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+  padding: 10px;
+}
+
+.result-filters label,
+.review-form label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.result-filters span,
+.review-form label > span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.result-filters input,
+.result-filters select,
+.review-form input,
+.review-form select,
+.review-form textarea {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--text);
+  padding: 9px 10px;
+  outline: none;
+}
+
+.result-filters input:focus,
+.result-filters select:focus,
+.review-form input:focus,
+.review-form select:focus,
+.review-form textarea:focus {
+  border-color: #8fb0ef;
+  box-shadow: 0 0 0 3px rgba(37, 99, 216, 0.1);
+}
+
 .result-list {
   display: grid;
   gap: 12px;
@@ -689,6 +758,8 @@ h1 {
 
 .card-actions {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
   margin-top: 14px;
   border-top: 1px solid var(--line);
@@ -746,6 +817,22 @@ h1 {
   font-size: 12px;
   font-weight: 750;
   overflow-wrap: anywhere;
+}
+
+.review-chip {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel-soft);
+  color: var(--muted);
+  padding: 6px 9px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.review-chip.reviewed {
+  border-color: #a8dcc0;
+  background: var(--green-soft);
+  color: var(--green);
 }
 
 .mini-button.is-active {
@@ -851,6 +938,50 @@ h1 {
 .detail-block h3 {
   margin-bottom: 10px;
   font-size: 14px;
+}
+
+.review-status-box {
+  display: grid;
+  gap: 6px;
+  border: 1px solid #a8dcc0;
+  border-radius: 8px;
+  background: var(--green-soft);
+  color: #25543a;
+  padding: 10px;
+}
+
+.review-status-box strong {
+  color: var(--green);
+  font-size: 13px;
+}
+
+.review-status-box span,
+.review-status-box p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.review-form {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+  padding: 12px;
+}
+
+.review-form h3 {
+  margin-bottom: 0;
+}
+
+.review-form textarea {
+  min-height: 88px;
+  resize: vertical;
+}
+
+.error-text.compact {
+  margin-top: 0;
 }
 
 .summary-grid {
@@ -1323,6 +1454,7 @@ mark {
   .condition-columns,
   .evidence-actions-bar,
   .history-toolbar,
+  .result-filters,
   .task-history-row {
     grid-template-columns: 1fr;
   }

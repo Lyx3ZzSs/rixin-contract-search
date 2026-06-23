@@ -1,4 +1,5 @@
 import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TaskProgressPage } from '../src/pages/TaskProgressPage';
@@ -49,6 +50,7 @@ const results = {
   buckets: {
     included: [
       {
+        result_id: 'result-1',
         document_uri: 'qmd://company_docs/contracts/purchase.md',
         document_path: 'contracts/purchase.md',
         document_title: '采购合同',
@@ -68,6 +70,11 @@ const results = {
           }
         ],
         confidence: 0.65,
+        review_status: 'unreviewed',
+        review_decision: null,
+        review_note: null,
+        reviewer_name: null,
+        reviewed_at: null,
         created_at: '2026-06-22T00:00:01Z',
         updated_at: '2026-06-22T00:00:01Z'
       }
@@ -110,9 +117,68 @@ describe('TaskProgressPage', () => {
     await waitFor(() => expect(screen.getByText('采购合同')).toBeInTheDocument());
     expect(screen.getByText('company_docs · contracts/purchase.md')).toBeInTheDocument();
     expect(screen.getByTestId('event-progress')).toBeInTheDocument();
+    expect(screen.getByText('理解筛选条件')).toBeInTheDocument();
+    expect(screen.getByText('实时活动')).toBeInTheDocument();
+    expect(screen.getByText('已分析 0 份文档')).toBeInTheDocument();
     expect(screen.getByText('入选 · keyword_evidence_matched')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '任务历史' })).toHaveAttribute('href', '/tasks');
+    expect(screen.getByRole('link', { name: '导出 CSV' })).toHaveAttribute('href', '/api/screening-tasks/task-1/export.csv');
+    expect(screen.getByRole('link', { name: '导出 XLSX' })).toHaveAttribute('href', '/api/screening-tasks/task-1/export.xlsx');
+    expect(screen.getByRole('link', { name: '导出 JSON' })).toHaveAttribute('href', '/api/screening-tasks/task-1/export.json');
+    expect(screen.getByRole('button', { name: '保存复核' })).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith('/api/screening-tasks/task-1/events', {
       signal: expect.any(AbortSignal)
+    });
+  });
+
+  it('saves a manual review and updates the selected result', async () => {
+    const user = userEvent.setup();
+    const reviewedResult = {
+      ...results.buckets.included[0],
+      review_status: 'reviewed',
+      review_decision: 'excluded',
+      review_note: '附件金额不匹配',
+      reviewer_name: '王五',
+      reviewed_at: '2026-06-22T00:05:00Z'
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(completedSummary))
+      .mockResolvedValueOnce(streamResponse([]))
+      .mockResolvedValueOnce(jsonResponse(completedSummary))
+      .mockResolvedValueOnce(jsonResponse(results))
+      .mockResolvedValueOnce(jsonResponse({ result: reviewedResult }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <MemoryRouter initialEntries={['/tasks/task-1']}>
+        <Routes>
+          <Route path="/tasks/:taskId" element={<TaskProgressPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    await waitFor(() => expect(screen.getByText('采购合同')).toBeInTheDocument());
+
+    await user.clear(screen.getByLabelText('复核人'));
+    await user.type(screen.getByLabelText('复核人'), '  王五  ');
+    await user.selectOptions(screen.getByLabelText('人工结论'), 'excluded');
+    await user.type(screen.getByLabelText('复核备注'), '附件金额不匹配');
+    await user.click(screen.getByRole('button', { name: '保存复核' }));
+
+    await waitFor(() => expect(screen.getByText('已复核：王五')).toBeInTheDocument());
+    expect(localStorage.getItem('contract-agent-reviewer-name')).toBe('王五');
+    expect(screen.getByText('人工结论：不符合')).toBeInTheDocument();
+    expect(screen.getAllByText('附件金额不匹配').length).toBeGreaterThanOrEqual(1);
+    expect(fetchMock).toHaveBeenCalledWith('/api/screening-tasks/task-1/results/result-1/review', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        review_status: 'reviewed',
+        review_decision: 'excluded',
+        review_note: '附件金额不匹配',
+        reviewer_name: '王五'
+      })
     });
   });
 });
