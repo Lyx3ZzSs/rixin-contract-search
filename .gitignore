@@ -1,0 +1,13 @@
+.env
+.DS_Store
+.idea/
+.venv/
+samples/
+storage/
+picture/
+__pycache__/
+.pytest_cache/
+*.egg-info/
+*.tsbuildinfo
+node_modules/
+dist/

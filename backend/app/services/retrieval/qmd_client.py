@@ -1,0 +1,242 @@
+from json import JSONDecodeError
+from typing import Any
+
+import httpx
+from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
+
+from app.config import settings
+from app.models import QmdCandidateSnippet, ScreeningTask
+
+
+class QmdUnavailable(RuntimeError):
+    pass
+
+
+class QmdResult(BaseModel):
+    file: str
+    docid: str | None = None
+    title: str | None = None
+    score: float | None = None
+    snippet: str | None = None
+    text: str | None = None
+    line: int | None = None
+    page_number: int | None = None
+    raw: dict[str, Any] = Field(default_factory=dict)
+
+
+class QmdClient:
+    def __init__(self, url: str | None = None, timeout: float = 60.0):
+        self.url = (url or settings.QMD_MCP_URL).rstrip("/")
+        self.timeout = timeout
+        self._session_id: str | None = None
+        self._next_id = 1
+
+    def status(self) -> dict[str, Any]:
+        payload = self._call_tool("status", {})
+        structured = payload.get("structuredContent")
+        if isinstance(structured, dict):
+            return structured
+        text = extract_text(payload)
+        return {"text": text, "collections": parse_status_collections(text)}
+
+    def query(self, query_text: str, collections: list[str], limit: int) -> list[QmdResult]:
+        payload = self._call_tool(
+            "query",
+            {
+                "query": query_text,
+                "collections": collections,
+                "limit": limit,
+            },
+        )
+        structured = payload.get("structuredContent")
+        raw_results = structured.get("results", []) if isinstance(structured, dict) else []
+        results = []
+        for item in raw_results:
+            if not isinstance(item, dict):
+                continue
+            results.append(
+                QmdResult(
+                    file=str(item.get("file") or ""),
+                    docid=item.get("docid"),
+                    title=item.get("title"),
+                    score=item.get("score"),
+                    snippet=item.get("snippet"),
+                    text=item.get("text"),
+                    line=item.get("line"),
+                    page_number=item.get("page_number"),
+                    raw=item,
+                )
+            )
+        return results
+
+    def _call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        if self._session_id is None:
+            self._initialize()
+        response = self._post(
+            {
+                "jsonrpc": "2.0",
+                "id": self._allocate_id(),
+                "method": "tools/call",
+                "params": {"name": name, "arguments": arguments},
+            }
+        )
+        result = response.get("result")
+        if not isinstance(result, dict):
+            raise QmdUnavailable(f"qmd MCP tool {name} returned an invalid response")
+        if result.get("isError"):
+            raise QmdUnavailable(extract_text(result) or f"qmd MCP tool {name} failed")
+        return result
+
+    def _initialize(self) -> None:
+        response = self._post(
+            {
+                "jsonrpc": "2.0",
+                "id": self._allocate_id(),
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {"name": "contract-screening-agent", "version": "0.1.0"},
+                },
+            },
+            include_session=False,
+            capture_session=True,
+        )
+        if "result" not in response:
+            raise QmdUnavailable("qmd MCP initialize failed")
+        self._post(
+            {
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized",
+                "params": {},
+            },
+            expect_response=False,
+        )
+
+    def _post(self, payload: dict[str, Any], include_session: bool = True, capture_session: bool = False, expect_response: bool = True) -> dict[str, Any]:
+        headers = {
+            "Accept": "application/json, text/event-stream",
+            "Content-Type": "application/json",
+        }
+        if include_session and self._session_id:
+            headers["Mcp-Session-Id"] = self._session_id
+        try:
+            with httpx.Client(timeout=self.timeout, trust_env=False) as client:
+                response = client.post(self.url, json=payload, headers=headers)
+        except httpx.HTTPError as exc:
+            raise QmdUnavailable(f"Unable to reach qmd MCP: {exc}") from exc
+        if capture_session:
+            self._session_id = response.headers.get("mcp-session-id") or response.headers.get("Mcp-Session-Id")
+        if response.status_code >= 400:
+            raise QmdUnavailable(f"qmd MCP returned HTTP {response.status_code}: {response.text[:300]}")
+        if not response.content:
+            if not expect_response:
+                return {}
+            raise QmdUnavailable(f"qmd MCP returned empty response from {self.url} with HTTP {response.status_code}")
+        try:
+            data = response.json()
+        except JSONDecodeError as exc:
+            raise QmdUnavailable(f"qmd MCP returned non-JSON response from {self.url} with HTTP {response.status_code}: {response.text[:300]}") from exc
+        if isinstance(data, list):
+            data = data[0] if data else {}
+        if not isinstance(data, dict):
+            raise QmdUnavailable("qmd MCP returned non-object JSON")
+        if data.get("error"):
+            raise QmdUnavailable(str(data["error"]))
+        return data
+
+    def _allocate_id(self) -> int:
+        value = self._next_id
+        self._next_id += 1
+        return value
+
+
+def configured_collections() -> list[str]:
+    return [item.strip() for item in settings.QMD_COLLECTIONS.split(",") if item.strip()]
+
+
+def ensure_collections_available(status: dict[str, Any], expected: list[str]) -> None:
+    collections = status.get("collections", [])
+    names = set()
+    if isinstance(collections, list):
+        for item in collections:
+            if isinstance(item, dict) and item.get("name"):
+                names.add(str(item["name"]))
+            elif isinstance(item, str):
+                names.add(item)
+    missing = [name for name in expected if name not in names]
+    if missing:
+        raise QmdUnavailable(f"qmd collections not found: {', '.join(missing)}")
+
+
+def extract_text(payload: dict[str, Any]) -> str:
+    content = payload.get("content", [])
+    if not isinstance(content, list):
+        return ""
+    parts = []
+    for item in content:
+        if isinstance(item, dict) and item.get("type") == "text":
+            parts.append(str(item.get("text") or ""))
+    return "\n".join(parts).strip()
+
+
+def parse_status_collections(text: str) -> list[dict[str, Any]]:
+    collections = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("- "):
+            name = stripped[2:].split(":", 1)[0].strip()
+            if name:
+                collections.append({"name": name})
+    return collections
+
+
+def normalize_qmd_file(file_value: str, fallback_collection: str) -> tuple[str, str, str]:
+    value = file_value.strip()
+    if value.startswith("qmd://"):
+        without_scheme = value[len("qmd://") :]
+    else:
+        without_scheme = value
+    parts = without_scheme.split("/", 1)
+    if len(parts) == 2 and parts[0]:
+        collection, path = parts[0], parts[1]
+    else:
+        collection, path = fallback_collection, without_scheme
+    return collection, path, f"qmd://{collection}/{path}"
+
+
+def persist_qmd_results(
+    session: Session,
+    task: ScreeningTask,
+    condition_id: str,
+    query_text: str,
+    results: list[QmdResult | dict[str, Any]],
+    fallback_collection: str,
+) -> int:
+    count = 0
+    for raw_result in results:
+        result = raw_result if isinstance(raw_result, QmdResult) else QmdResult(**raw_result, raw=raw_result)
+        snippet = (result.snippet or result.text or "").strip()
+        if not snippet or not result.file:
+            continue
+        collection, document_path, document_uri = normalize_qmd_file(result.file, fallback_collection)
+        row = QmdCandidateSnippet(
+            task_id=task.id,
+            document_uri=document_uri,
+            document_path=document_path,
+            document_title=result.title,
+            collection=collection,
+            query_text=query_text,
+            condition_id=condition_id,
+            snippet_text=snippet,
+            score=result.score,
+            page_number=result.page_number if result.page_number and result.page_number > 0 else None,
+            artifact_ref=document_uri,
+            qmd_docid=result.docid,
+            raw_result=result.raw or result.model_dump(),
+            is_weak=len(snippet) < 4,
+        )
+        session.add(row)
+        count += 1
+    return count
