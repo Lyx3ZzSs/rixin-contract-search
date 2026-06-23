@@ -99,6 +99,15 @@ const taskTwoRunningSummary = {
   counts: { documents: 0, included: 0, uncertain: 0, excluded: 0 }
 };
 
+const failedLlmSummary = {
+  ...runningSummary,
+  status: 'failed',
+  progress_percent: 100,
+  current_stage: 'failed',
+  error_code: 'agent_llm_not_configured',
+  error_message: 'LLM not configured'
+};
+
 function RouteSwitchHarness() {
   const navigate = useNavigate();
   return (
@@ -248,5 +257,27 @@ describe('TaskProgressPage', () => {
     resolveTaskTwoSummary(jsonResponse(taskTwoRunningSummary));
     await waitFor(() => expect(screen.getAllByText('第二个任务').length).toBeGreaterThanOrEqual(1));
     expect(fetchMock).not.toHaveBeenCalledWith('/api/screening-tasks/task-2/results/result-1/review', expect.anything());
+  });
+
+  it('shows actionable guidance for mapped failed task summaries', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(failedLlmSummary))
+      .mockResolvedValueOnce(streamResponse([]));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <MemoryRouter initialEntries={['/tasks/task-1']}>
+        <Routes>
+          <Route path="/tasks/:taskId" element={<TaskProgressPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    await waitFor(() => expect(screen.getByText(/LLM 配置不可用/)).toBeInTheDocument());
+    expect(screen.getByText(/AGENT_LLM_API_KEY/)).toBeInTheDocument();
+    expect(screen.getByText(/AGENT_LLM_BASE_URL/)).toBeInTheDocument();
+    expect(screen.getByText(/AGENT_LLM_MODEL/)).toBeInTheDocument();
+    expect(screen.queryByText('LLM not configured')).not.toBeInTheDocument();
   });
 });

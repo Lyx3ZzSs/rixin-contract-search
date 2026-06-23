@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { exportTaskUrl, getTaskResults, getTaskSummary, reviewDocumentResult } from '../lib/api';
+import { failureMessage } from '../lib/errorMessages';
 import { getReviewerName, setReviewerName } from '../lib/reviewer';
 import { subscribeTaskEvents } from '../lib/sse';
 import { buildTaskActivity } from '../lib/taskActivity';
@@ -105,6 +106,7 @@ export function TaskProgressPage() {
   );
   const selectedDocument = filteredDocuments.find((item) => item.document_uri === selectedUri) || filteredDocuments[0] || null;
   const isCompleted = visibleSummary?.status === 'completed';
+  const taskFailureMessage = error || (visibleSummary?.status === 'failed' ? failureMessage(visibleSummary.error_code, visibleSummary.error_message) : null);
 
   if (!taskId) {
     return <div className="agent-shell">缺少任务 ID</div>;
@@ -161,7 +163,7 @@ export function TaskProgressPage() {
               <span style={{ width: `${visibleSummary?.progress_percent ?? 0}%` }} />
             </div>
             <strong>{visibleSummary?.progress_percent ?? 0}%</strong>
-            {error || visibleSummary?.status === 'failed' ? <p className="error-text">{error || visibleSummary?.error_message || '任务执行失败'}</p> : null}
+            {taskFailureMessage ? <p className="error-text">{taskFailureMessage}</p> : null}
           </section>
 
           <section className="side-card">
