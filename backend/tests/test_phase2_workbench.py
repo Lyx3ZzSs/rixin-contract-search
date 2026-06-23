@@ -204,3 +204,43 @@ def test_review_result_rejects_result_from_other_task(client, db_session):
 
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "not_found"
+
+
+def test_review_result_rejects_blank_reviewer_name(client, db_session):
+    session, _ = db_session
+    task = create_task(session, "GPU采购", "采购GPU服务器")
+    result = ScreeningDocumentResult(
+        task_id=task.id,
+        document_uri="qmd://contract_docs/equipment-purchase-contract.md",
+        document_path="equipment-purchase-contract.md",
+        document_title="设备采购合同",
+        collection="contract_docs",
+        decision=ResultDecision.uncertain.value,
+        reason="Agent evidence was incomplete",
+        matched_conditions=[],
+        missing_conditions=["gpu"],
+        evidence=[],
+        confidence=0.4,
+    )
+    session.add(result)
+    session.commit()
+
+    response = client.patch(
+        f"/api/screening-tasks/{task.id}/results/{result.id}/review",
+        json={
+            "review_status": "reviewed",
+            "review_decision": "included",
+            "review_note": "人工确认设备清单包含GPU服务器",
+            "reviewer_name": "   ",
+        },
+    )
+
+    assert response.status_code == 422
+
+    session.expire_all()
+    stored = session.get(ScreeningDocumentResult, result.id)
+    assert stored.review_status == ReviewStatus.unreviewed.value
+    assert stored.review_decision is None
+    assert stored.review_note is None
+    assert stored.reviewer_name is None
+    assert stored.reviewed_at is None

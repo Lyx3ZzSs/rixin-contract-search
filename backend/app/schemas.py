@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.enums import ParseStatus, ResultDecision, ReviewStatus, TaskStatus
 
@@ -135,6 +135,14 @@ class ReviewResultRequest(BaseModel):
     review_decision: ResultDecision
     review_note: str | None = None
     reviewer_name: str = Field(min_length=1, max_length=128)
+
+    @field_validator("reviewer_name")
+    @classmethod
+    def normalize_reviewer_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("reviewer_name is required")
+        return value
 
 
 class ReviewResultResponse(BaseModel):
