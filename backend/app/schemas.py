@@ -77,6 +77,29 @@ class TaskSummaryResponse(BaseModel):
     counts: TaskCounts
 
 
+class TaskListItem(BaseModel):
+    task_id: UUID
+    title: str
+    raw_query: str
+    status: TaskStatus
+    progress_percent: int
+    current_stage: str
+    error_code: str | None = None
+    error_message: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None = None
+    counts: TaskCounts
+    review_counts: ReviewCounts
+
+
+class TaskListResponse(BaseModel):
+    items: list[TaskListItem]
+    total: int
+    limit: int
+    offset: int
+
+
 class EvidenceItem(BaseModel):
     page: int | None = None
     text: str

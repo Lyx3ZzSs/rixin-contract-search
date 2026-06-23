@@ -4,7 +4,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.auth import AuthContext, get_auth
@@ -19,7 +19,10 @@ from app.schemas import (
     DocumentResultItem,
     EvidenceItem,
     ResultBuckets,
+    ReviewCounts,
     TaskCounts,
+    TaskListItem,
+    TaskListResponse,
     TaskResultsResponse,
     TaskSummaryResponse,
 )
@@ -68,6 +71,103 @@ async def create_task(request: Request, auth: AuthContext = Depends(get_auth), s
 
     task = session.get(ScreeningTask, task.id)
     task.metrics = {"rq_job_id": rq_job_id}
+    session.commit()
+    return response_payload
+
+
+@router.get("", response_model=TaskListResponse)
+def list_tasks(
+    status: str | None = None,
+    q: str | None = None,
+    sort: str = "created_desc",
+    limit: int = 20,
+    offset: int = 0,
+    auth: AuthContext = Depends(get_auth),
+    session: Session = Depends(get_session),
+):
+    limit = max(1, min(limit, 100))
+    offset = max(0, offset)
+    statement = select(ScreeningTask).where(ScreeningTask.owner_id == auth.owner_id)
+    if status:
+        if status == "active":
+            statement = statement.where(ScreeningTask.status.in_([TaskStatus.uploaded.value, TaskStatus.retrieving.value, TaskStatus.classifying.value]))
+        elif status in {item.value for item in TaskStatus}:
+            statement = statement.where(ScreeningTask.status == status)
+        else:
+            raise ApiError("invalid_status", "Invalid task status filter", 400)
+    if q and q.strip():
+        needle = f"%{q.strip()}%"
+        statement = statement.where(or_(ScreeningTask.title.ilike(needle), ScreeningTask.raw_query.ilike(needle)))
+
+    total = session.scalar(select(func.count()).select_from(statement.subquery())) or 0
+    if sort == "created_asc":
+        statement = statement.order_by(ScreeningTask.created_at.asc())
+    elif sort == "created_desc":
+        statement = statement.order_by(ScreeningTask.created_at.desc())
+    else:
+        raise ApiError("invalid_sort", "Invalid task sort", 400)
+
+    tasks = session.scalars(statement.limit(limit).offset(offset)).all()
+    items = []
+    for task in tasks:
+        results = session.scalars(select(ScreeningDocumentResult).where(ScreeningDocumentResult.task_id == task.id)).all()
+        counts, review_counts = task_counts_for_results(results)
+        items.append(
+            TaskListItem(
+                task_id=task.id,
+                title=task.title,
+                raw_query=task.raw_query,
+                status=TaskStatus(task.status),
+                progress_percent=task.progress_percent,
+                current_stage=task.current_stage,
+                error_code=task.error_code,
+                error_message=task.error_message,
+                created_at=task.created_at,
+                updated_at=task.updated_at,
+                completed_at=task.completed_at,
+                counts=counts,
+                review_counts=review_counts,
+            )
+        )
+    return TaskListResponse(items=items, total=total, limit=limit, offset=offset)
+
+
+@router.post("/{task_id}/copy", response_model=CreateTaskResponse)
+def copy_task(task_id: UUID, auth: AuthContext = Depends(get_auth), session: Session = Depends(get_session)):
+    source = load_owned_task(session, task_id, auth)
+    copied_from_task_id = str(source.id)
+    task = ScreeningTask(
+        owner_id=auth.owner_id,
+        title=source.title,
+        raw_query=source.raw_query,
+        status=TaskStatus.uploaded.value,
+        current_stage=TaskStatus.uploaded.value,
+        progress_percent=5,
+        metrics={"copied_from_task_id": copied_from_task_id},
+    )
+    session.add(task)
+    session.flush()
+    write_audit(session, AuditEventType.task_created.value, {"task_id": str(task.id), "title": task.title, "copied_from_task_id": copied_from_task_id}, actor_id=auth.owner_id, task=task)
+    append_stream_event(session, task.id, "task_created", {"task_id": str(task.id), "title": task.title, "copied_from_task_id": copied_from_task_id})
+    response_payload = CreateTaskResponse(task_id=task.id, title=task.title, raw_query=task.raw_query, status=TaskStatus(task.status), progress_percent=task.progress_percent, events_url=f"/api/screening-tasks/{task.id}/events", results_url=f"/api/screening-tasks/{task.id}/results")
+    session.commit()
+
+    try:
+        rq_job_id = enqueue_screening_task(task.id)
+    except Exception as exc:
+        task = session.get(ScreeningTask, task.id)
+        task.status = TaskStatus.failed.value
+        task.current_stage = TaskStatus.failed.value
+        task.error_code = "enqueue_failed"
+        task.error_message = "Unable to enqueue screening task"
+        task.completed_at = utcnow()
+        write_audit(session, AuditEventType.task_failed.value, {"task_id": str(task.id), "stage": "uploaded", "error_code": "enqueue_failed", "message": "Unable to enqueue screening task"}, actor_id=auth.owner_id, task=task)
+        append_stream_event(session, task.id, "task_failed", {"task_id": str(task.id), "stage": "uploaded", "error_code": "enqueue_failed", "message": "Unable to enqueue screening task"})
+        session.commit()
+        raise ApiError("enqueue_failed", "Unable to enqueue screening task", 503) from exc
+
+    task = session.get(ScreeningTask, task.id)
+    task.metrics = {"copied_from_task_id": copied_from_task_id, "rq_job_id": rq_job_id}
     session.commit()
     return response_payload
 
@@ -154,10 +254,19 @@ def load_owned_task(session: Session, task_id: UUID, auth: AuthContext) -> Scree
 
 def task_summary(session: Session, task: ScreeningTask) -> TaskSummaryResponse:
     results = session.scalars(select(ScreeningDocumentResult).where(ScreeningDocumentResult.task_id == task.id)).all()
+    counts, _ = task_counts_for_results(results)
+    return TaskSummaryResponse(task_id=task.id, title=task.title, raw_query=task.raw_query, status=TaskStatus(task.status), progress_percent=task.progress_percent, current_stage=task.current_stage, error_code=task.error_code, error_message=task.error_message, created_at=task.created_at, updated_at=task.updated_at, completed_at=task.completed_at, counts=counts)
+
+
+def task_counts_for_results(results: list[ScreeningDocumentResult]) -> tuple[TaskCounts, ReviewCounts]:
     counts = TaskCounts(
         documents=len(results),
         included=sum(1 for r in results if r.decision == ResultDecision.included.value),
         uncertain=sum(1 for r in results if r.decision == ResultDecision.uncertain.value),
         excluded=sum(1 for r in results if r.decision == ResultDecision.excluded.value),
     )
-    return TaskSummaryResponse(task_id=task.id, title=task.title, raw_query=task.raw_query, status=TaskStatus(task.status), progress_percent=task.progress_percent, current_stage=task.current_stage, error_code=task.error_code, error_message=task.error_message, created_at=task.created_at, updated_at=task.updated_at, completed_at=task.completed_at, counts=counts)
+    review_counts = ReviewCounts(
+        reviewed=sum(1 for r in results if r.review_status == ReviewStatus.reviewed.value),
+        unreviewed=sum(1 for r in results if r.review_status == ReviewStatus.unreviewed.value),
+    )
+    return counts, review_counts
