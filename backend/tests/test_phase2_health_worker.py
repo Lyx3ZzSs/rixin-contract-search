@@ -1,4 +1,5 @@
 import sys
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -156,6 +157,29 @@ def test_qmd_status_reports_configured_collections_and_redacts_url(client, monke
     assert payload["configured_collections"] == [
         {"name": "company_docs", "exists": True, "document_count": 12, "files": 12},
         {"name": "legal_docs", "exists": True, "document_count": 5, "files": 5},
+    ]
+
+
+def test_qmd_status_uses_numeric_zero_for_unknown_counts(client, monkeypatch):
+    from app import config
+    from app.api import health
+
+    runtime_settings = Settings(AGENT_LLM_API_KEY="test-key", QMD_COLLECTIONS="company_docs,legal_docs")
+
+    class FakeQmdClient:
+        def status(self):
+            return {"collections": ["company_docs", {"name": "legal_docs"}]}
+
+    monkeypatch.setattr(config, "settings", runtime_settings)
+    monkeypatch.setattr(health, "settings", runtime_settings)
+    monkeypatch.setattr(health, "QmdClient", FakeQmdClient)
+
+    response = client.get("/api/qmd/status")
+
+    assert response.status_code == 200
+    assert response.json()["collections"] == [
+        {"name": "company_docs", "exists": True, "document_count": 0, "files": 0},
+        {"name": "legal_docs", "exists": True, "document_count": 0, "files": 0},
     ]
 
 
@@ -334,3 +358,10 @@ def test_worker_startup_diagnostics_redact_url_secrets(monkeypatch, capsys):
 def test_invalid_worker_mode_validation():
     with pytest.raises(ValidationError):
         Settings(AGENT_LLM_API_KEY="test-key", RQ_WORKER_MODE="threaded")
+
+
+def test_compose_worker_uses_app_worker_entrypoint():
+    compose = (Path(__file__).resolve().parents[2] / "docker-compose.yml").read_text(encoding="utf-8")
+
+    assert "python -m app.worker" in compose
+    assert "rq worker screening" not in compose

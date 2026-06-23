@@ -44,7 +44,7 @@ services:
 
   worker:
     build: ./backend
-    command: sh -c "rq worker screening --url \"$$REDIS_URL\""
+    command: python -m app.worker
     env_file:
       - .env
     environment:

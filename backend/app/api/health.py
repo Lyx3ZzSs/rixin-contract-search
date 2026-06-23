@@ -41,8 +41,8 @@ def qmd_status() -> dict[str, object]:
         {
             "name": name,
             "exists": name in available,
-            "document_count": available.get(name),
-            "files": available.get(name),
+            "document_count": available.get(name) or 0,
+            "files": available.get(name) or 0,
         }
         for name in expected
     ]
