@@ -99,7 +99,9 @@ def test_runtime_status_redacts_llm_key_and_reports_worker_mode(client, monkeypa
 
     assert response.status_code == 200
     payload = response.json()
+    assert "env_file" in payload
     assert payload["worker"]["mode"] == "simple"
+    assert payload["worker"]["configured_mode"] == "simple"
     assert payload["llm"]["has_api_key"] is True
     assert payload["llm"]["api_key_length"] == len("secret-runtime-key")
     assert "api_key" not in payload["llm"]
@@ -179,7 +181,10 @@ def test_qmd_status_redacts_url_secrets_from_unavailable_error(client, monkeypat
     assert response.status_code == 200
     assert "qmd-password" not in response.text
     assert "qmd-token" not in response.text
-    assert response.json()["error"]["message"] == (
+    payload = response.json()
+    assert payload["error_type"] == "qmd_unavailable"
+    assert payload["collections"] == [{"name": "company_docs", "exists": False, "document_count": 0, "files": 0}]
+    assert payload["error"] == (
         "qmd MCP returned empty response from https://***@qmd.example/mcp"
     )
 
@@ -204,7 +209,7 @@ def test_qmd_status_sanitizes_structured_exception_args(client, monkeypatch):
     assert response.status_code == 200
     assert "payload-api-key" not in response.text
     assert "payload-bearer" not in response.text
-    assert response.json()["error"]["message"] == "{'api_key': '***', 'detail': ['Authorization: Bearer ***']}"
+    assert response.json()["error"] == "{'api_key': '***', 'detail': ['Authorization: Bearer ***']}"
 
 
 def test_qmd_status_recursively_sanitizes_upstream_payload_and_configured_key(client, monkeypatch):
@@ -266,6 +271,17 @@ def test_worker_mode_defaults_to_simple_worker_on_macos_auto(monkeypatch):
     monkeypatch.setattr(sys, "platform", "darwin")
 
     assert choose_worker_class("auto") is SimpleWorker
+
+
+def test_runtime_status_reports_effective_worker_mode_for_auto(monkeypatch):
+    from app.config import Settings
+
+    runtime_settings = Settings(AGENT_LLM_API_KEY="test-key", RQ_WORKER_MODE="auto")
+    monkeypatch.setattr(sys, "platform", "darwin")
+
+    status = runtime_settings.redacted_runtime_status()
+
+    assert status["worker"] == {"mode": "simple", "configured_mode": "auto"}
 
 
 def test_worker_mode_can_choose_fork():

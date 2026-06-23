@@ -1,6 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 import re
+import sys
 from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import field_validator, model_validator
@@ -255,7 +256,7 @@ class Settings(BaseSettings):
     def redacted_runtime_status(self) -> dict[str, object]:
         api_key = self.AGENT_LLM_API_KEY
         return {
-            "env": {"file": str(self.model_config["env_file"])},
+            "env_file": str(self.model_config["env_file"]),
             "llm": {
                 "base_url": redact_url(self.AGENT_LLM_BASE_URL),
                 "model": self.AGENT_LLM_MODEL,
@@ -268,7 +269,7 @@ class Settings(BaseSettings):
                 "collections": [item.strip() for item in self.QMD_COLLECTIONS.split(",") if item.strip()],
             },
             "redis": {"url": redact_url(self.REDIS_URL)},
-            "worker": {"mode": self.RQ_WORKER_MODE},
+            "worker": {"mode": effective_worker_mode(self.RQ_WORKER_MODE), "configured_mode": self.RQ_WORKER_MODE},
         }
 
 
@@ -278,3 +279,10 @@ def get_settings() -> Settings:
 
 
 settings = get_settings()
+
+
+def effective_worker_mode(mode: str) -> str:
+    mode = mode.strip()
+    if mode in {"simple", "fork"}:
+        return mode
+    return "simple" if sys.platform == "darwin" else "fork"
