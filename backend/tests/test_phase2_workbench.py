@@ -4,7 +4,7 @@ from uuid import uuid4
 from sqlalchemy import inspect
 
 from app.enums import ResultDecision, ReviewStatus, TaskStatus
-from app.models import ScreeningDocumentResult, ScreeningTask
+from app.models import AuditEvent, ScreeningDocumentResult, ScreeningTask
 
 
 def test_document_result_review_fields_default_to_unreviewed(db_session):
@@ -127,3 +127,80 @@ def test_copy_task_creates_new_task_and_enqueues(client, db_session, monkeypatch
     assert body["raw_query"] == source.raw_query
     assert body["title"] == source.title
     assert len(enqueued) == 1
+
+
+def test_review_document_result_records_manual_decision(client, db_session):
+    session, _ = db_session
+    task = create_task(session, "GPU采购", "采购GPU服务器")
+    result = ScreeningDocumentResult(
+        task_id=task.id,
+        document_uri="qmd://contract_docs/equipment-purchase-contract.md",
+        document_path="equipment-purchase-contract.md",
+        document_title="设备采购合同",
+        collection="contract_docs",
+        decision=ResultDecision.uncertain.value,
+        reason="Agent evidence was incomplete",
+        matched_conditions=[],
+        missing_conditions=["gpu"],
+        evidence=[],
+        confidence=0.4,
+    )
+    session.add(result)
+    session.commit()
+
+    response = client.patch(
+        f"/api/screening-tasks/{task.id}/results/{result.id}/review",
+        json={
+            "review_status": "reviewed",
+            "review_decision": "included",
+            "review_note": "人工确认设备清单包含GPU服务器",
+            "reviewer_name": "张三",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()["result"]
+    assert body["decision"] == "uncertain"
+    assert body["review_status"] == "reviewed"
+    assert body["review_decision"] == "included"
+    assert body["review_note"] == "人工确认设备清单包含GPU服务器"
+    assert body["reviewer_name"] == "张三"
+    assert body["reviewed_at"] is not None
+
+    session.expire_all()
+    stored = session.get(ScreeningDocumentResult, result.id)
+    assert stored.decision == ResultDecision.uncertain.value
+    assert stored.review_decision == ResultDecision.included.value
+
+    audit = session.query(AuditEvent).filter_by(event_type="result_reviewed").one()
+    assert audit.payload["result_id"] == str(result.id)
+    assert audit.payload["review_decision"] == "included"
+
+
+def test_review_result_rejects_result_from_other_task(client, db_session):
+    session, _ = db_session
+    task = create_task(session, "任务A", "A")
+    other_task = create_task(session, "任务B", "B")
+    result = ScreeningDocumentResult(
+        task_id=other_task.id,
+        document_uri="qmd://contract_docs/a.md",
+        document_path="a.md",
+        document_title="A",
+        collection="contract_docs",
+        decision=ResultDecision.excluded.value,
+        reason="no match",
+        matched_conditions=[],
+        missing_conditions=["x"],
+        evidence=[],
+        confidence=0.2,
+    )
+    session.add(result)
+    session.commit()
+
+    response = client.patch(
+        f"/api/screening-tasks/{task.id}/results/{result.id}/review",
+        json={"review_status": "reviewed", "review_decision": "included", "review_note": "", "reviewer_name": "张三"},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "not_found"

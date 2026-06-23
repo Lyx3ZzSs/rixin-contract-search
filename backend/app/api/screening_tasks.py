@@ -19,6 +19,8 @@ from app.schemas import (
     DocumentResultItem,
     EvidenceItem,
     ResultBuckets,
+    ReviewResultRequest,
+    ReviewResultResponse,
     ReviewCounts,
     TaskCounts,
     TaskListItem,
@@ -184,28 +186,48 @@ def get_results(task_id: UUID, auth: AuthContext = Depends(get_auth), session: S
     buckets = ResultBuckets(included=[], uncertain=[], excluded=[])
     results = session.scalars(select(ScreeningDocumentResult).where(ScreeningDocumentResult.task_id == task.id)).all()
     for result in results:
-        item = DocumentResultItem(
-            result_id=result.id,
-            document_uri=result.document_uri,
-            document_path=result.document_path,
-            document_title=result.document_title,
-            collection=result.collection,
-            decision=ResultDecision(result.decision),
-            reason=result.reason,
-            matched_conditions=result.matched_conditions,
-            missing_conditions=result.missing_conditions,
-            evidence=[EvidenceItem(**e) for e in result.evidence],
-            confidence=result.confidence,
-            review_status=ReviewStatus(result.review_status),
-            review_decision=ResultDecision(result.review_decision) if result.review_decision else None,
-            review_note=result.review_note,
-            reviewer_name=result.reviewer_name,
-            reviewed_at=result.reviewed_at,
-            created_at=result.created_at,
-            updated_at=result.updated_at,
-        )
+        item = document_result_item(result)
         getattr(buckets, result.decision).append(item)
     return TaskResultsResponse(task_id=task.id, buckets=buckets)
+
+
+@router.patch("/{task_id}/results/{result_id}/review", response_model=ReviewResultResponse)
+def review_result(
+    task_id: UUID,
+    result_id: UUID,
+    payload: ReviewResultRequest,
+    auth: AuthContext = Depends(get_auth),
+    session: Session = Depends(get_session),
+):
+    task = load_owned_task(session, task_id, auth)
+    result = session.get(ScreeningDocumentResult, result_id)
+    if result is None or result.task_id != task.id:
+        raise ApiError("not_found", "Not found", 404)
+
+    note = (payload.review_note or "").strip()
+    reviewer_name = payload.reviewer_name.strip()
+    result.review_status = ReviewStatus.reviewed.value
+    result.review_decision = payload.review_decision.value
+    result.review_note = note or None
+    result.reviewer_name = reviewer_name
+    result.reviewed_at = utcnow()
+    write_audit(
+        session,
+        AuditEventType.result_reviewed.value,
+        {
+            "task_id": str(task.id),
+            "result_id": str(result.id),
+            "document_uri": result.document_uri,
+            "agent_decision": result.decision,
+            "review_decision": payload.review_decision.value,
+            "reviewer_name": reviewer_name,
+        },
+        actor_id=auth.owner_id,
+        task=task,
+    )
+    session.commit()
+    session.refresh(result)
+    return ReviewResultResponse(result=document_result_item(result))
 
 
 @router.get("/{task_id}/events")
@@ -256,6 +278,29 @@ def task_summary(session: Session, task: ScreeningTask) -> TaskSummaryResponse:
     results = session.scalars(select(ScreeningDocumentResult).where(ScreeningDocumentResult.task_id == task.id)).all()
     counts, _ = task_counts_for_results(results)
     return TaskSummaryResponse(task_id=task.id, title=task.title, raw_query=task.raw_query, status=TaskStatus(task.status), progress_percent=task.progress_percent, current_stage=task.current_stage, error_code=task.error_code, error_message=task.error_message, created_at=task.created_at, updated_at=task.updated_at, completed_at=task.completed_at, counts=counts)
+
+
+def document_result_item(result: ScreeningDocumentResult) -> DocumentResultItem:
+    return DocumentResultItem(
+        result_id=result.id,
+        document_uri=result.document_uri,
+        document_path=result.document_path,
+        document_title=result.document_title,
+        collection=result.collection,
+        decision=ResultDecision(result.decision),
+        reason=result.reason,
+        matched_conditions=result.matched_conditions,
+        missing_conditions=result.missing_conditions,
+        evidence=[EvidenceItem(**e) for e in result.evidence],
+        confidence=result.confidence,
+        review_status=ReviewStatus(result.review_status),
+        review_decision=ResultDecision(result.review_decision) if result.review_decision else None,
+        review_note=result.review_note,
+        reviewer_name=result.reviewer_name,
+        reviewed_at=result.reviewed_at,
+        created_at=result.created_at,
+        updated_at=result.updated_at,
+    )
 
 
 def task_counts_for_results(results: list[ScreeningDocumentResult]) -> tuple[TaskCounts, ReviewCounts]:

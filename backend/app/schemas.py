@@ -131,10 +131,10 @@ class DocumentResultItem(BaseModel):
 
 
 class ReviewResultRequest(BaseModel):
-    review_status: ReviewStatus
-    review_decision: ResultDecision | None = None
+    review_status: Literal["reviewed"]
+    review_decision: ResultDecision
     review_note: str | None = None
-    reviewer_name: str | None = None
+    reviewer_name: str = Field(min_length=1, max_length=128)
 
 
 class ReviewResultResponse(BaseModel):
