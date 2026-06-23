@@ -1,3 +1,4 @@
+from pathlib import Path
 from uuid import uuid4
 
 from sqlalchemy import inspect
@@ -49,7 +50,8 @@ def test_document_result_review_columns_exist_in_test_schema(db_session):
 
 
 def test_phase2_migration_adds_review_columns():
-    migration = open("alembic/versions/0003_phase2_workbench.py", encoding="utf-8").read()
+    migration_path = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "0003_phase2_workbench.py"
+    migration = migration_path.read_text(encoding="utf-8")
     assert "review_status" in migration
     assert "review_decision" in migration
     assert "review_note" in migration
