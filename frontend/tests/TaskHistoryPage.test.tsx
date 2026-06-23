@@ -129,6 +129,35 @@ describe('TaskHistoryPage', () => {
     expect(screen.queryByText('采购合同筛选')).not.toBeInTheDocument();
     expect(screen.queryByText('暂无筛选任务')).not.toBeInTheDocument();
   });
+
+  it('shows Redis and RQ guidance when copied task enqueue fails', async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/copy') && init?.method === 'POST') {
+        return Promise.resolve(
+          new Response(JSON.stringify({ error: { code: 'enqueue_failed', message: 'Unable to enqueue screening task' } }), {
+            status: 503,
+            headers: { 'Content-Type': 'application/json' }
+          })
+        );
+      }
+      return Promise.resolve(jsonResponse(taskList));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter initialEntries={['/tasks']}>
+        <TaskHistoryPage />
+      </MemoryRouter>
+    );
+
+    await screen.findByText('采购合同筛选');
+    await user.click(screen.getAllByRole('button', { name: '复制任务' })[0]);
+
+    expect(await screen.findByText(/Redis\/RQ/)).toBeInTheDocument();
+    expect(screen.queryByText('Unable to enqueue screening task')).not.toBeInTheDocument();
+  });
 });
 
 function LocationEcho() {

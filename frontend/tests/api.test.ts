@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  ApiClientError,
   apiBase,
   copyScreeningTask,
   createScreeningTask,
@@ -168,5 +169,29 @@ describe('api client', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(getQmdStatus()).rejects.toThrow('qmd unavailable');
+  });
+
+  it('preserves server error codes from standard error envelopes', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: { code: 'enqueue_failed', message: 'Unable to enqueue screening task' } }), {
+        status: 503,
+        headers: { 'Content-Type': 'application/json' }
+      })
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    let thrown: unknown;
+    try {
+      await createScreeningTask({ query: '合同总价' });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(ApiClientError);
+    expect(thrown).toMatchObject({
+      name: 'ApiClientError',
+      message: 'Unable to enqueue screening task',
+      code: 'enqueue_failed'
+    });
   });
 });

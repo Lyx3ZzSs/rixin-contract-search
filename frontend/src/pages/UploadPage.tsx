@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { createScreeningTask, getQmdStatus, getRuntimeStatus } from '../lib/api';
+import { apiErrorMessage } from '../lib/errorMessages';
 import type { QmdCollectionStatus, QmdStatus, RuntimeStatus } from '../lib/types';
 
 export function UploadPage() {
@@ -43,7 +44,7 @@ export function UploadPage() {
       const task = await createScreeningTask({ query: trimmedQuery });
       navigate(taskDetailPath(task.task_id));
     } catch (err) {
-      setError(err instanceof Error ? err.message : '创建筛选任务失败');
+      setError(apiErrorMessage(err, '创建筛选任务失败'));
     } finally {
       setSubmitting(false);
     }

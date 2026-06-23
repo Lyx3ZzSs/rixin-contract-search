@@ -140,6 +140,33 @@ describe('UploadPage', () => {
     expect(await screen.findByText('qmd backend timeout: /internal/path?token=secret')).toBeInTheDocument();
     expect(screen.getByText('0 文档 · 不可用')).toBeInTheDocument();
   });
+
+  it('shows Redis and RQ guidance when task creation enqueue fails', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(qmdStatus))
+      .mockResolvedValueOnce(jsonResponse(runtimeStatus))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: { code: 'enqueue_failed', message: 'Unable to enqueue screening task' } }), {
+          status: 503,
+          headers: { 'Content-Type': 'application/json' }
+        })
+      );
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter>
+        <UploadPage />
+      </MemoryRouter>
+    );
+
+    await user.type(screen.getByLabelText('筛选条件'), '合同总价');
+    await user.click(screen.getByRole('button', { name: '开始筛选' }));
+
+    expect(await screen.findByText(/Redis\/RQ/)).toBeInTheDocument();
+    expect(screen.queryByText('Unable to enqueue screening task')).not.toBeInTheDocument();
+  });
 });
 
 function LocationEcho() {

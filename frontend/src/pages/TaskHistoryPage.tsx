@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { copyScreeningTask, listScreeningTasks } from '../lib/api';
+import { apiErrorMessage } from '../lib/errorMessages';
 import type { TaskListItem, TaskListStatusFilter, TaskSort } from '../lib/types';
 
 const statusOptions: Array<{ value: TaskListStatusFilter; label: string }> = [
@@ -49,7 +50,7 @@ export function TaskHistoryPage() {
         if (!cancelled) {
           setTasks([]);
           setTotal(0);
-          setLoadError(err instanceof Error ? err.message : '加载任务历史失败');
+          setLoadError(apiErrorMessage(err, '加载任务历史失败'));
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -71,7 +72,7 @@ export function TaskHistoryPage() {
       const copied = await copyScreeningTask(taskId);
       navigate(taskDetailPath(copied.task_id));
     } catch (err) {
-      setError(err instanceof Error ? err.message : '复制任务失败');
+      setError(apiErrorMessage(err, '复制任务失败'));
     } finally {
       setCopyingTaskId(null);
     }

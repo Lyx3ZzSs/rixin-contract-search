@@ -14,16 +14,32 @@ import type {
 
 export const apiBase = '';
 
+export class ApiClientError extends Error {
+  readonly code?: string;
+
+  constructor(message: string, code?: string) {
+    super(message);
+    this.name = 'ApiClientError';
+    this.code = code;
+  }
+}
+
 async function readJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
     let message = `Request failed with HTTP ${response.status}`;
+    let code: string | undefined;
     try {
       const body = await response.json();
-      message = (typeof body?.error === 'string' ? body.error : body?.error?.message) || message;
+      if (typeof body?.error === 'string') {
+        message = body.error;
+      } else if (body?.error && typeof body.error === 'object') {
+        message = typeof body.error.message === 'string' ? body.error.message : message;
+        code = typeof body.error.code === 'string' ? body.error.code : undefined;
+      }
     } catch {
       // Keep the generic message when the server did not return JSON.
     }
-    throw new Error(message);
+    throw new ApiClientError(message, code);
   }
   return response.json() as Promise<T>;
 }

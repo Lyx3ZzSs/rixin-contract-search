@@ -1,3 +1,5 @@
+import { ApiClientError } from './api';
+
 const genericFailureMessage = '任务执行失败，请查看后端日志获取更多信息。';
 
 const failureMessages: Record<string, string> = {
@@ -11,4 +13,10 @@ const failureMessages: Record<string, string> = {
 export function failureMessage(code?: string | null, fallback?: string | null): string {
   if (code && failureMessages[code]) return failureMessages[code];
   return fallback?.trim() || genericFailureMessage;
+}
+
+export function apiErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof ApiClientError) return failureMessage(error.code, error.message);
+  if (error instanceof Error) return error.message;
+  return fallback;
 }
