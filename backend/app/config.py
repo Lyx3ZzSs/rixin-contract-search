@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+import re
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from pydantic import field_validator, model_validator
@@ -7,7 +8,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PROJECT_ENV_FILE = PROJECT_ROOT / ".env"
-SENSITIVE_QUERY_MARKERS = ("token", "key", "secret", "password", "pwd", "auth", "credential")
+SENSITIVE_KEY_MARKERS = ("token", "key", "secret", "password", "pwd", "auth", "credential")
+URL_PATTERN = re.compile(r"https?://[^\s\"'<>]+")
 
 
 def redact_url(value: str) -> str:
@@ -18,20 +20,48 @@ def redact_url(value: str) -> str:
         if ":" in host and not host.startswith("["):
             host = f"[{host}]"
         port = f":{parsed.port}" if parsed.port is not None else ""
-        if parsed.password is None:
-            netloc = f"***@{host}{port}"
-        else:
-            netloc = f"{parsed.username}:***@{host}{port}"
+        netloc = f"***@{host}{port}"
 
     query = urlencode(
-        [
-            (key, "***" if any(marker in key.lower() for marker in SENSITIVE_QUERY_MARKERS) else query_value)
-            for key, query_value in parse_qsl(parsed.query, keep_blank_values=True)
-        ],
+        [(key, "***") for key, _ in parse_qsl(parsed.query, keep_blank_values=True)],
         doseq=True,
         safe="*",
     )
-    return urlunsplit((parsed.scheme, netloc, parsed.path, query, parsed.fragment))
+    fragment = "***" if parsed.fragment else ""
+    return urlunsplit((parsed.scheme, netloc, parsed.path, query, fragment))
+
+
+def sanitize_secrets(value):
+    if isinstance(value, dict):
+        return {
+            key: "***" if is_sensitive_key(key) else sanitize_secrets(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [sanitize_secrets(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(sanitize_secrets(item) for item in value)
+    if isinstance(value, str):
+        return sanitize_secret_string(value)
+    return value
+
+
+def is_sensitive_key(key: object) -> bool:
+    normalized = str(key).lower()
+    return any(marker in normalized for marker in SENSITIVE_KEY_MARKERS)
+
+
+def sanitize_secret_string(value: str) -> str:
+    return URL_PATTERN.sub(redact_url_match, value)
+
+
+def redact_url_match(match: re.Match[str]) -> str:
+    url = match.group(0)
+    trailing = ""
+    while url and url[-1] in ".,;:)]}":
+        trailing = url[-1] + trailing
+        url = url[:-1]
+    return f"{redact_url(url)}{trailing}"
 
 
 class Settings(BaseSettings):
@@ -179,7 +209,7 @@ class Settings(BaseSettings):
         return {
             "env": {"file": str(self.model_config["env_file"])},
             "llm": {
-                "base_url": self.AGENT_LLM_BASE_URL,
+                "base_url": redact_url(self.AGENT_LLM_BASE_URL),
                 "model": self.AGENT_LLM_MODEL,
                 "has_api_key": bool(api_key),
                 "api_key_length": len(api_key),

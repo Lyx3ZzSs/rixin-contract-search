@@ -2,7 +2,7 @@ from typing import Any
 
 from fastapi import APIRouter
 
-from app.config import redact_url, settings
+from app.config import redact_url, sanitize_secrets, settings
 from app.services.retrieval.qmd_client import QmdClient, QmdUnavailable
 
 router = APIRouter()
@@ -44,7 +44,7 @@ def qmd_status() -> dict[str, object]:
             }
             for name in expected
         ],
-        "status": status,
+        "status": sanitize_secrets(status),
     }
 
 
@@ -64,7 +64,7 @@ def indexed_collections(status: dict[str, Any]) -> dict[str, int | None]:
 
 
 def redact_qmd_error_message(exc: Exception) -> str:
-    return str(exc).replace(settings.QMD_MCP_URL, redact_url(settings.QMD_MCP_URL))
+    return sanitize_secrets(str(exc))
 
 
 def collection_document_count(collection: dict[str, Any]) -> int | None:
