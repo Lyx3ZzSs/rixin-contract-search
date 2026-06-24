@@ -40,7 +40,7 @@ def normalize_ledger_evidence_item(
     if not item.get("source"):
         item["source"] = "qmd"
     if not item.get("role"):
-        item["role"] = EvidenceRole.retrieval_candidate.value
+        item["role"] = EvidenceRole.supporting.value
     if not item.get("source_tool"):
         item["source_tool"] = EvidenceSourceTool.query.value
     if document_uri is not None and not item.get("document_uri"):

@@ -32,28 +32,30 @@ def verify_documents(session: Session, task: ScreeningTask, plan: ScreeningPlanP
 def _gather_evidence(qmd: Any, document: dict[str, Any], condition: ScreeningCondition) -> tuple[list[dict[str, Any]], str | None]:
     strategy = _enum_value(condition.verification_strategy)
     if strategy == VerificationStrategy.grep_then_read.value:
-        return _grep_then_read_evidence(qmd, document, condition), None
+        return _grep_then_read_evidence(qmd, document, condition)
     if strategy == VerificationStrategy.query_only.value:
-        return _query_only_evidence(document, condition), None
+        return _query_only_evidence(document, condition)
     if strategy in {VerificationStrategy.doc_query.value, VerificationStrategy.toc_guided_read.value}:
         return [], "unsupported_verification_strategy"
     return [], "unsupported_verification_strategy"
 
 
-def _grep_then_read_evidence(qmd: Any, document: dict[str, Any], condition: ScreeningCondition) -> list[dict[str, Any]]:
+def _grep_then_read_evidence(qmd: Any, document: dict[str, Any], condition: ScreeningCondition) -> tuple[list[dict[str, Any]], str | None]:
     document_uri = str(document["document_uri"])
     query_text = condition.qmd_queries[0] if condition.qmd_queries else condition.description
     try:
         grep_payload = qmd.doc_grep(document_uri, query_text)
         first = _first_match(grep_payload)
+        if not first:
+            return [], "verification_failed"
         read_payload = qmd.doc_read(document_uri, page=first.get("page"), anchor=first.get("anchor"), window=2)
     except Exception:
-        return []
+        return [], "verification_failed"
     structured = read_payload.get("structuredContent") if isinstance(read_payload, dict) else None
     structured = structured if isinstance(structured, dict) else {}
     text = str(structured.get("text") or first.get("text") or "").strip()
     if not text:
-        return []
+        return [], "verification_failed"
     page = _coerce_int(structured.get("page", first.get("page")))
     anchor = structured.get("anchor", first.get("anchor"))
     return [
@@ -67,10 +69,10 @@ def _grep_then_read_evidence(qmd: Any, document: dict[str, Any], condition: Scre
             source_tool=EvidenceSourceTool.doc_read.value,
             context=text,
         )
-    ]
+    ], None
 
 
-def _query_only_evidence(document: dict[str, Any], condition: ScreeningCondition) -> list[dict[str, Any]]:
+def _query_only_evidence(document: dict[str, Any], condition: ScreeningCondition) -> tuple[list[dict[str, Any]], str | None]:
     evidence = []
     for item in document["conditions"].get(condition.id, []):
         dumped = item.model_dump() if hasattr(item, "model_dump") else dict(item)
@@ -87,7 +89,7 @@ def _query_only_evidence(document: dict[str, Any], condition: ScreeningCondition
                 context=str(dumped.get("text") or ""),
             )
         )
-    return [item for item in evidence if item["text"]]
+    return [item for item in evidence if item["text"]], None
 
 
 def _judge_condition(
@@ -127,7 +129,10 @@ def _normalize_raw_verdict(
     trusted_supporting_count = len(supporting)
 
     if not supporting:
-        if evidence_reason == "unsupported_verification_strategy":
+        if evidence_reason == "verification_failed":
+            verdict = ConditionVerdictValue.unknown.value
+            missing_reason = missing_reason or evidence_reason
+        elif evidence_reason == "unsupported_verification_strategy":
             verdict = ConditionVerdictValue.unknown.value
             missing_reason = missing_reason or evidence_reason
         elif verdict == ConditionVerdictValue.satisfied.value:
@@ -210,6 +215,9 @@ def _build_document_result(task: ScreeningTask, document: dict[str, Any], plan: 
 
 
 def _verification_status(verdicts: list[ConditionVerdict], support_rate: float) -> str:
+    if any(verdict.missing_reason in {"verification_failed", "unsupported_verification_strategy"} for verdict in verdicts):
+        return VerificationStatus.verification_failed.value
+
     if support_rate < 1.0:
         return VerificationStatus.partially_verified.value
 
@@ -245,7 +253,7 @@ def _document_decision(verdicts: list[ConditionVerdict]) -> tuple[str, str, list
         uncertain_reasons.append(UncertainReason.conflicting_evidence.value)
     if ConditionVerdictValue.unknown.value in values:
         uncertain_reasons.append(UncertainReason.missing_evidence.value)
-    if any(verdict.missing_reason == "unsupported_verification_strategy" for verdict in verdicts):
+    if any(verdict.missing_reason in {"verification_failed", "unsupported_verification_strategy"} for verdict in verdicts):
         uncertain_reasons.append(UncertainReason.verification_failed.value)
     if uncertain_reasons:
         return ResultDecision.uncertain.value, "condition_missing_or_conflicting", uncertain_reasons

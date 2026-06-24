@@ -73,6 +73,44 @@ def test_evidence_ledger_endpoint_flattens_document_and_verdict_evidence(client,
     assert response.json()["items"][0]["role"] == "supporting"
 
 
+def test_evidence_ledger_endpoint_defaults_legacy_result_evidence_as_supporting(client, db_session):
+    session, _ = db_session
+    task = ScreeningTask(id=uuid4(), owner_id="internal-user", title="金额筛选", raw_query="金额大于100万", metrics={})
+    session.add(task)
+    session.flush()
+    session.add(
+        ScreeningDocumentResult(
+            task_id=task.id,
+            document_uri="qmd://company_docs/contracts/a.md",
+            document_path="contracts/a.md",
+            document_title="A合同",
+            collection="company_docs",
+            decision=ResultDecision.included.value,
+            reason="condition_verdicts",
+            matched_conditions=["amount"],
+            missing_conditions=[],
+            evidence=[
+                {
+                    "page": 3,
+                    "text": "合同总价为人民币120万元",
+                    "condition_id": "amount",
+                    "artifact_ref": "qmd://company_docs/contracts/a.md",
+                }
+            ],
+            confidence=0.9,
+        )
+    )
+    session.commit()
+
+    response = client.get(f"/api/screening-tasks/{task.id}/evidence-ledger")
+
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert item["role"] == "supporting"
+    assert item["source_tool"] == "query"
+    assert item["used_for_decision"] is True
+
+
 def test_qmd_evidence_context_prefers_requested_condition_id(client, monkeypatch, db_session):
     import app.api.qmd_documents as routes
 

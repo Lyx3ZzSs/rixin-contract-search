@@ -2,7 +2,7 @@ from uuid import uuid4
 
 from sqlalchemy import select
 
-from app.enums import ConditionVerdictValue, ResultDecision, TaskStatus, VerificationStatus, VerificationStrategy
+from app.enums import ConditionVerdictValue, ResultDecision, TaskStatus, UncertainReason, VerificationStatus, VerificationStrategy
 from app.models import ConditionVerdict, ScreeningDocumentResult, ScreeningTask
 from app.schemas import ScreeningCondition, ScreeningPlanPayload
 
@@ -294,12 +294,13 @@ def test_agent_fails_closed_when_deep_read_evidence_is_missing(db_session):
     verdict = session.scalars(select(ConditionVerdict).where(ConditionVerdict.task_id == task.id)).one()
     assert verdict.verdict == ConditionVerdictValue.unknown.value
     assert verdict.supporting_evidence == []
-    assert verdict.missing_reason == "supporting_evidence_required"
+    assert verdict.missing_reason == "verification_failed"
 
     result = session.scalars(select(ScreeningDocumentResult).where(ScreeningDocumentResult.task_id == task.id)).one()
     assert result.decision == ResultDecision.uncertain.value
     assert result.evidence == []
-    assert result.verification_status != VerificationStatus.deep_read_verified.value
+    assert result.verification_status == VerificationStatus.verification_failed.value
+    assert UncertainReason.verification_failed.value in result.uncertain_reasons
 
 
 def test_agent_ignores_forged_llm_evidence_and_keeps_gathered_provenance(db_session):

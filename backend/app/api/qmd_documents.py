@@ -1,5 +1,5 @@
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
@@ -191,14 +191,7 @@ def _safe_redirect_target(value: Any, *, error_code: str) -> str:
     target = clean_optional_string(value)
     if target is None:
         raise ApiError(error_code, "QMD preview is unavailable", 404)
-    parsed = urlsplit(target)
-    if parsed.scheme or parsed.netloc:
-        raise ApiError(error_code, "QMD preview is unavailable", 404)
-    if not target.startswith("/") or target.startswith("//"):
-        raise ApiError(error_code, "QMD preview is unavailable", 404)
-    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in target):
-        raise ApiError(error_code, "QMD preview is unavailable", 404)
-    if "\\" in target:
+    if not _is_safe_root_relative_target(target):
         raise ApiError(error_code, "QMD preview is unavailable", 404)
     return target
 
@@ -207,6 +200,10 @@ def _is_api_redirect_target(value: Any) -> bool:
     target = clean_optional_string(value)
     if target is None:
         return False
+    return _is_safe_root_relative_target(target)
+
+
+def _is_safe_root_relative_target(target: str) -> bool:
     parsed = urlsplit(target)
     if parsed.scheme or parsed.netloc:
         return False
@@ -215,5 +212,12 @@ def _is_api_redirect_target(value: Any) -> bool:
     if any(ord(char) < 0x20 or ord(char) == 0x7F for char in target):
         return False
     if "\\" in target:
+        return False
+
+    decoded_path = unquote(parsed.path)
+    if "\\" in decoded_path:
+        return False
+    segments = decoded_path.split("/")
+    if any(segment in {".", ".."} for segment in segments):
         return False
     return True

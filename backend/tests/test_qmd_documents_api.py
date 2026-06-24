@@ -156,6 +156,36 @@ def test_qmd_document_redirect_rejects_hostile_targets(client, db_session, monke
 
         monkeypatch.setattr(routes, "QmdClient", fake_qmd_factory)
         response = client.get(
+            f"/api/qmd-documents/{route}?task_id={task.id}&document_uri=qmd%3A%2F%2Fcompany_docs%2Fcontracts%2Fa.md",
+            follow_redirects=False,
+        )
+        assert response.status_code == 404
+        assert response.json()["error"]["code"] == error_code
+
+
+def test_qmd_document_redirect_rejects_dot_segment_targets(client, db_session, monkeypatch):
+    import app.api.qmd_documents as routes
+
+    session, _ = db_session
+    task = _seed_task_with_result(session)
+
+    cases = [
+        ("open-link", "open_url", "/viewer/../api/x", "qmd_preview_unavailable"),
+        ("open-link", "open_url", "/viewer/%2e%2e/api/x", "qmd_preview_unavailable"),
+        ("download", "download_url", "/download/..\\api/x", "qmd_download_unavailable"),
+        ("download", "download_url", "/download/%5c/api/x", "qmd_download_unavailable"),
+    ]
+
+    for route, field, url, error_code in cases:
+        def fake_qmd_factory(field_name=field, target_url=url):
+            class FakeQmd:
+                def document_preview(self, document_uri):
+                    return {"document_uri": document_uri, field_name: target_url}
+
+            return FakeQmd()
+
+        monkeypatch.setattr(routes, "QmdClient", fake_qmd_factory)
+        response = client.get(
             f"/api/qmd-documents/{route}?task_id={task.id}&document_uri=qmd%3A%2F%2Fcompany_docs%2Fcontracts%2Fa.md"
         )
         assert response.status_code == 404
