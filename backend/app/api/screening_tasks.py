@@ -336,6 +336,10 @@ def document_result_item(result: ScreeningDocumentResult) -> DocumentResultItem:
         review_note=result.review_note,
         reviewer_name=result.reviewer_name,
         reviewed_at=result.reviewed_at,
+        decision_basis=result.decision_basis,
+        uncertain_reasons=result.uncertain_reasons,
+        evidence_support_rate=result.evidence_support_rate,
+        verification_status=result.verification_status,
         created_at=result.created_at,
         updated_at=result.updated_at,
     )

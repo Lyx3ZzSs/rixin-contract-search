@@ -4,7 +4,7 @@ from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, Integer
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base, GUID, utcnow
-from app.enums import ParseStatus, TaskStatus
+from app.enums import ParseStatus, TaskStatus, VerificationStatus
 
 
 class ScreeningTask(Base):
@@ -130,6 +130,10 @@ class ScreeningDocumentResult(Base):
     missing_conditions: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     evidence: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     confidence: Mapped[float] = mapped_column(nullable=False)
+    decision_basis: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    uncertain_reasons: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    evidence_support_rate: Mapped[float] = mapped_column(nullable=False, default=0.0)
+    verification_status: Mapped[str] = mapped_column(String(32), nullable=False, default=VerificationStatus.query_only.value)
     review_status: Mapped[str] = mapped_column(String(32), nullable=False, default="unreviewed")
     review_decision: Mapped[str | None] = mapped_column(String(32), nullable=True)
     review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -145,6 +149,47 @@ class ScreeningDocumentResult(Base):
         Index("ix_document_results_task_decision", "task_id", "decision"),
         Index("ix_document_results_task_review", "task_id", "review_status"),
     )
+
+
+class ConditionVerdict(Base):
+    __tablename__ = "condition_verdicts"
+
+    id: Mapped[object] = mapped_column(GUID(), primary_key=True, default=uuid4)
+    task_id: Mapped[object] = mapped_column(GUID(), ForeignKey("screening_tasks.id", ondelete="CASCADE"), nullable=False)
+    document_uri: Mapped[str] = mapped_column(Text, nullable=False)
+    condition_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    verdict: Mapped[str] = mapped_column(String(32), nullable=False)
+    confidence: Mapped[float] = mapped_column(nullable=False, default=0.0)
+    supporting_evidence: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    contradicting_evidence: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    missing_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    verification_method: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[object] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("task_id", "document_uri", "condition_id", name="uq_condition_verdict_task_doc_condition"),
+        Index("ix_condition_verdicts_task_document", "task_id", "document_uri"),
+    )
+
+
+class AgentEvalCase(Base):
+    __tablename__ = "agent_eval_cases"
+
+    id: Mapped[object] = mapped_column(GUID(), primary_key=True, default=uuid4)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    raw_query: Mapped[str] = mapped_column(Text, nullable=False)
+    expected: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[object] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class AgentEvalRun(Base):
+    __tablename__ = "agent_eval_runs"
+
+    id: Mapped[object] = mapped_column(GUID(), primary_key=True, default=uuid4)
+    case_ids: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    metrics: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    failures: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    created_at: Mapped[object] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
 class ContractScreeningResult(Base):
