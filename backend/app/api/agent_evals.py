@@ -19,10 +19,30 @@ from app.services.evals import compute_eval_metrics
 router = APIRouter()
 
 
+class AgentEvalPrediction(BaseModel):
+    document_uri: str
+    decision: str
+    evidence_support_rate: float = Field(ge=0.0, le=1.0)
+    verification_status: str | None = None
+
+
+class AgentEvalExpected(BaseModel):
+    included: list[str] = Field(default_factory=list)
+    excluded: list[str] = Field(default_factory=list)
+    uncertain: list[str] = Field(default_factory=list)
+
+
+class AgentEvalCase(BaseModel):
+    name: str | None = None
+    raw_query: str | None = None
+    expected: AgentEvalExpected = Field(default_factory=AgentEvalExpected)
+    actual: list[AgentEvalPrediction] = Field(default_factory=list)
+
+
 class AgentEvalRunRequest(BaseModel):
-    cases: list[dict[str, Any]] = Field(min_length=1)
-    schema_failures: int = 0
-    verification_failures: int = 0
+    cases: list[AgentEvalCase] = Field(min_length=1)
+    schema_failures: int = Field(default=0, ge=0)
+    verification_failures: int = Field(default=0, ge=0)
 
 
 class AgentEvalRunResponse(BaseModel):
@@ -54,7 +74,7 @@ def run_agent_evals(
 
 
 @router.get("/{run_id}", response_model=AgentEvalRunResponse)
-def get_agent_eval_run(run_id: UUID, session: Session = Depends(get_session)):
+def get_agent_eval_run(run_id: UUID, auth: AuthContext = Depends(get_auth), session: Session = Depends(get_session)):
     run = session.get(AgentEvalRun, run_id)
     if run is None:
         raise ApiError("not_found", "Not found", 404)
