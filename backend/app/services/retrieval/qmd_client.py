@@ -301,7 +301,10 @@ def parse_status_collections(text: str) -> list[dict[str, Any]]:
 
 def validate_qmd_document_uri(document_uri: str) -> str:
     value = document_uri.strip()
-    parsed = urlsplit(value)
+    try:
+        parsed = urlsplit(value)
+    except ValueError as exc:
+        raise QmdUnavailable("qmd document URI is malformed") from exc
     if parsed.scheme != "qmd":
         raise QmdUnavailable("qmd document URI must start with qmd://")
     if not parsed.netloc:
@@ -309,7 +312,13 @@ def validate_qmd_document_uri(document_uri: str) -> str:
     if not parsed.path or parsed.path == "/":
         raise QmdUnavailable("qmd document URI requires a document path")
     decoded_collection = unquote(parsed.netloc)
-    if "\x00" in value or "\x00" in decoded_collection:
+    if (
+        "\x00" in value
+        or decoded_collection in {".", ".."}
+        or "\x00" in decoded_collection
+        or "/" in decoded_collection
+        or "\\" in decoded_collection
+    ):
         raise QmdUnavailable("qmd document URI contains an unsafe path segment")
 
     segments = parsed.path.split("/")[1:]

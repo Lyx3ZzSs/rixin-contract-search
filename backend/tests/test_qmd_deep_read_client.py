@@ -66,6 +66,10 @@ def test_normalize_qmd_file_rejects_path_escape():
         "qmd://company_docs/contracts/%00a.md",
         "qmd://company_docs/contracts%5c..%5csecrets.pdf",
         "qmd://company_docs/contracts%2f..%2fsecrets.pdf",
+        "qmd://[bad/contracts/a.md",
+        "qmd://company%2f..%2fsecret/contracts/a.md",
+        "qmd://company%5csecret/contracts/a.md",
+        "qmd://../contracts/a.md",
     ],
 )
 def test_normalize_qmd_file_rejects_unsafe_decoded_uri_segments(document_uri):
