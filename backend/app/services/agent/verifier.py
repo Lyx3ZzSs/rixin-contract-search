@@ -21,19 +21,23 @@ def verify_documents(session: Session, task: ScreeningTask, plan: ScreeningPlanP
     for document in documents.values():
         verdicts = []
         for condition in plan.conditions:
-            evidence = _gather_evidence(qmd, document, condition)
-            raw_verdict = _judge_condition(llm, plan, condition, document, evidence)
+            evidence, evidence_reason = _gather_evidence(qmd, document, condition)
+            raw_verdict = _judge_condition(llm, plan, condition, document, evidence, evidence_reason)
             verdict = _persist_condition_verdict(session, task, document, condition, raw_verdict)
             verdicts.append(verdict)
         session.add(_build_document_result(task, document, plan, verdicts))
     return len(documents)
 
 
-def _gather_evidence(qmd: Any, document: dict[str, Any], condition: ScreeningCondition) -> list[dict[str, Any]]:
+def _gather_evidence(qmd: Any, document: dict[str, Any], condition: ScreeningCondition) -> tuple[list[dict[str, Any]], str | None]:
     strategy = _enum_value(condition.verification_strategy)
     if strategy == VerificationStrategy.grep_then_read.value:
-        return _grep_then_read_evidence(qmd, document, condition)
-    return _query_only_evidence(document, condition)
+        return _grep_then_read_evidence(qmd, document, condition), None
+    if strategy == VerificationStrategy.query_only.value:
+        return _query_only_evidence(document, condition), None
+    if strategy in {VerificationStrategy.doc_query.value, VerificationStrategy.toc_guided_read.value}:
+        return [], "unsupported_verification_strategy"
+    return [], "unsupported_verification_strategy"
 
 
 def _grep_then_read_evidence(qmd: Any, document: dict[str, Any], condition: ScreeningCondition) -> list[dict[str, Any]]:
@@ -86,15 +90,22 @@ def _query_only_evidence(document: dict[str, Any], condition: ScreeningCondition
     return [item for item in evidence if item["text"]]
 
 
-def _judge_condition(llm: Any, plan: ScreeningPlanPayload, condition: ScreeningCondition, document: dict[str, Any], evidence: list[dict[str, Any]]) -> dict[str, Any]:
+def _judge_condition(
+    llm: Any,
+    plan: ScreeningPlanPayload,
+    condition: ScreeningCondition,
+    document: dict[str, Any],
+    evidence: list[dict[str, Any]],
+    evidence_reason: str | None,
+) -> dict[str, Any]:
     try:
         raw = llm.judge_condition(plan, condition, _serialize_document(document), evidence)
     except Exception as exc:
         raw = {"verdict": ConditionVerdictValue.unknown.value, "confidence": 0.0, "supporting_evidence": [], "contradicting_evidence": [], "missing_reason": str(exc)}
-    return _normalize_raw_verdict(raw, evidence)
+    return _normalize_raw_verdict(raw, evidence, evidence_reason)
 
 
-def _normalize_raw_verdict(raw: dict[str, Any], fallback_evidence: list[dict[str, Any]]) -> dict[str, Any]:
+def _normalize_raw_verdict(raw: dict[str, Any], fallback_evidence: list[dict[str, Any]], evidence_reason: str | None) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raw = {}
     verdict = str(raw.get("verdict", ConditionVerdictValue.unknown.value))
@@ -103,9 +114,20 @@ def _normalize_raw_verdict(raw: dict[str, Any], fallback_evidence: list[dict[str
     supporting = _normalize_evidence_list(raw.get("supporting_evidence"), fallback_evidence)
     contradicting = _normalize_evidence_list(raw.get("contradicting_evidence"), [])
     missing_reason = raw.get("missing_reason")
+    if not supporting:
+        if evidence_reason == "unsupported_verification_strategy":
+            verdict = ConditionVerdictValue.unknown.value
+            missing_reason = missing_reason or evidence_reason
+        elif verdict == ConditionVerdictValue.satisfied.value:
+            verdict = ConditionVerdictValue.unknown.value
+            missing_reason = missing_reason or "supporting_evidence_required"
+        elif missing_reason is None:
+            missing_reason = evidence_reason or "supporting_evidence_required"
+    if verdict == ConditionVerdictValue.unknown.value and not supporting and missing_reason is None:
+        missing_reason = "supporting_evidence_required"
     return {
         "verdict": verdict,
-        "confidence": _clamp_confidence(raw.get("confidence", 0.0)),
+        "confidence": 0.0 if not supporting and verdict == ConditionVerdictValue.unknown.value else _clamp_confidence(raw.get("confidence", 0.0)),
         "supporting_evidence": supporting,
         "contradicting_evidence": contradicting,
         "missing_reason": str(missing_reason) if missing_reason is not None else None,
@@ -199,6 +221,8 @@ def _document_decision(verdicts: list[ConditionVerdict]) -> tuple[str, str, list
         uncertain_reasons.append(UncertainReason.conflicting_evidence.value)
     if ConditionVerdictValue.unknown.value in values:
         uncertain_reasons.append(UncertainReason.missing_evidence.value)
+    if any(verdict.missing_reason == "unsupported_verification_strategy" for verdict in verdicts):
+        uncertain_reasons.append(UncertainReason.verification_failed.value)
     if uncertain_reasons:
         return ResultDecision.uncertain.value, "condition_missing_or_conflicting", uncertain_reasons
     return ResultDecision.excluded.value, "condition_not_satisfied", []
