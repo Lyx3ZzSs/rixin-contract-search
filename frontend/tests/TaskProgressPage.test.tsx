@@ -414,6 +414,9 @@ describe('TaskProgressPage', () => {
     const matrix = await screen.findByRole('table', { name: '条件矩阵' });
     expect(fetchMock.mock.calls.map(([input]) => String(input)).some((url) => url.includes('/api/qmd-documents/'))).toBe(false);
 
+    await user.click(within(matrix).getByRole('button', { name: '采购合同' }));
+    expect(fetchMock.mock.calls.map(([input]) => String(input)).some((url) => url.includes('/api/qmd-documents/'))).toBe(false);
+
     await user.click(within(matrix).getByRole('button', { name: '满足' }));
 
     await waitFor(() => {
@@ -470,6 +473,67 @@ describe('TaskProgressPage', () => {
     );
 
     await waitFor(() => expect(screen.getByText('artifact_ref_only')).toBeInTheDocument());
+  });
+
+  it('renders page labels for legacy evidence rows without a page number', async () => {
+    const noPageLedger = {
+      task_id: 'task-1',
+      items: [
+        {
+          ...evidenceLedger.items[0],
+          page: undefined
+        }
+      ]
+    };
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/screening-tasks/task-1') return Promise.resolve(jsonResponse(completedSummary));
+      if (url === '/api/screening-tasks/task-1/events') return Promise.resolve(streamResponse([]));
+      if (url === '/api/screening-tasks/task-1/results') return Promise.resolve(jsonResponse(results));
+      if (url === '/api/screening-tasks/task-1/condition-verdicts') return Promise.resolve(jsonResponse(verdicts));
+      if (url === '/api/screening-tasks/task-1/evidence-ledger') return Promise.resolve(jsonResponse(noPageLedger));
+      return Promise.reject(new Error(`Unexpected URL ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <MemoryRouter initialEntries={['/tasks/task-1']}>
+        <Routes>
+          <Route path="/tasks/:taskId" element={<TaskProgressPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    await waitFor(() => expect(screen.getByText('页码未知')).toBeInTheDocument());
+    expect(screen.queryByText('第 undefined 页')).not.toBeInTheDocument();
+  });
+
+  it('surfaces phase 3 fetch failures without hiding the panels', async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/screening-tasks/task-1') return Promise.resolve(jsonResponse(completedSummary));
+      if (url === '/api/screening-tasks/task-1/events') return Promise.resolve(streamResponse([]));
+      if (url === '/api/screening-tasks/task-1/results') return Promise.resolve(jsonResponse(results));
+      if (url === '/api/screening-tasks/task-1/condition-verdicts') return Promise.reject(new Error('condition verdict service unavailable'));
+      if (url === '/api/screening-tasks/task-1/evidence-ledger') return Promise.reject(new Error('ledger service unavailable'));
+      return Promise.reject(new Error(`Unexpected URL ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <MemoryRouter initialEntries={['/tasks/task-1']}>
+        <Routes>
+          <Route path="/tasks/:taskId" element={<TaskProgressPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    await screen.findByText('条件矩阵');
+    expect(screen.getByText('证据账本')).toBeInTheDocument();
+    expect(screen.getByText('condition verdict service unavailable')).toBeInTheDocument();
+    expect(screen.getByText('ledger service unavailable')).toBeInTheDocument();
+    expect(screen.getByText('暂无条件矩阵')).toBeInTheDocument();
+    expect(screen.getByText('暂无证据账本')).toBeInTheDocument();
   });
 
   it('reloads qmd context using the current condition and page target', async () => {

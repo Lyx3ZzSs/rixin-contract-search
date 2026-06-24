@@ -21,7 +21,6 @@ import type {
   ConditionVerdictItem,
   ConditionVerdictValue,
   DocumentResultItem,
-  EvidenceLedgerResponse,
   LedgerEvidenceItem,
   QmdDocumentPreview,
   QmdEvidenceContext,
@@ -59,6 +58,8 @@ export function TaskProgressPage() {
   const [results, setResults] = useState<TaskResults | null>(null);
   const [verdicts, setVerdicts] = useState<ConditionVerdictItem[]>([]);
   const [ledger, setLedger] = useState<LedgerEvidenceItem[]>([]);
+  const [matrixWarning, setMatrixWarning] = useState<string | null>(null);
+  const [ledgerWarning, setLedgerWarning] = useState<string | null>(null);
   const [events, setEvents] = useState<StreamEvent[]>([]);
   const [selectedUri, setSelectedUri] = useState<string | null>(null);
   const [previewTarget, setPreviewTarget] = useState<PreviewTarget | null>(null);
@@ -80,6 +81,8 @@ export function TaskProgressPage() {
     setResults(null);
     setVerdicts([]);
     setLedger([]);
+    setMatrixWarning(null);
+    setLedgerWarning(null);
     setEvents([]);
     setSelectedUri(null);
     setPreviewTarget(null);
@@ -131,17 +134,23 @@ export function TaskProgressPage() {
   async function loadFinal(id: string, isCancelled: () => boolean) {
     setPhase3Loading(true);
     try {
-      const [nextSummary, nextResults, nextVerdicts, nextLedger] = await Promise.all([
+      const [nextSummary, nextResults, verdictResult, ledgerResult] = await Promise.all([
         getTaskSummary(id),
         getTaskResults(id),
-        getConditionVerdicts(id).catch((): { task_id: string; items: ConditionVerdictItem[] } => ({ task_id: id, items: [] })),
-        getEvidenceLedger(id).catch((): EvidenceLedgerResponse => ({ task_id: id, items: [] }))
+        getConditionVerdicts(id)
+          .then((items) => ({ items: items.items, warning: null }))
+          .catch((err) => ({ items: [] as ConditionVerdictItem[], warning: apiErrorMessage(err, '条件矩阵加载失败') })),
+        getEvidenceLedger(id)
+          .then((items) => ({ items: items.items, warning: null }))
+          .catch((err) => ({ items: [] as LedgerEvidenceItem[], warning: apiErrorMessage(err, '证据账本加载失败') }))
       ]);
       if (isCancelled()) return;
       setSummary(nextSummary);
       setResults(normalizeTaskResults(nextResults));
-      setVerdicts(nextVerdicts.items);
-      setLedger(nextLedger.items);
+      setVerdicts(verdictResult.items);
+      setLedger(ledgerResult.items);
+      setMatrixWarning(verdictResult.warning);
+      setLedgerWarning(ledgerResult.warning);
       const first = flattenResults(nextResults)[0];
       setSelectedUri((current) => current || first?.document_uri || null);
     } finally {
@@ -318,6 +327,10 @@ export function TaskProgressPage() {
             documents={filteredDocuments}
             selectedDocumentUri={selectedDocumentUri}
             verdicts={verdicts}
+            warning={matrixWarning}
+            onSelectDocument={(documentUri) => {
+              setSelectedUri(documentUri);
+            }}
             onPick={(target) => {
               setSelectedUri(target.documentUri);
               setPreviewTarget(target);
@@ -327,6 +340,7 @@ export function TaskProgressPage() {
             document={selectedDocument}
             items={visibleLedger}
             loading={phase3Loading}
+            warning={ledgerWarning}
             onPick={(target) => {
               setSelectedUri(target.documentUri);
               setPreviewTarget(target);
@@ -481,11 +495,15 @@ function ConditionMatrixPanel({
   documents,
   selectedDocumentUri,
   verdicts,
+  warning,
+  onSelectDocument,
   onPick
 }: {
   documents: DocumentResultItem[];
   selectedDocumentUri: string | null;
   verdicts: ConditionVerdictItem[];
+  warning: string | null;
+  onSelectDocument: (documentUri: string) => void;
   onPick: (target: PreviewTarget) => void;
 }) {
   const matrix = buildVerdictMatrix(documents, verdicts);
@@ -502,6 +520,12 @@ function ConditionMatrixPanel({
         </div>
         <span>{matrix.rows.length} 行</span>
       </div>
+      {warning ? (
+        <div className="phase3-warning" role="status">
+          <strong>条件矩阵数据加载失败</strong>
+          <span>{warning}</span>
+        </div>
+      ) : null}
       {columns.length === 0 || matrix.rows.length === 0 ? (
         <div className="empty-state compact">
           <strong>暂无条件矩阵</strong>
@@ -525,13 +549,7 @@ function ConditionMatrixPanel({
                 aria-current={row.documentUri === selectedDocumentUri ? 'true' : undefined}
                 className="matrix-document-button"
                 type="button"
-                onClick={() =>
-                  onPick({
-                    documentUri: row.documentUri,
-                    conditionId: row.items.values().next().value?.condition_id || null,
-                    page: null
-                  })
-                }
+                onClick={() => onSelectDocument(row.documentUri)}
               >
                 {row.documentTitle || row.documentPath}
               </button>
@@ -544,7 +562,7 @@ function ConditionMatrixPanel({
                     type="button"
                     onClick={() => {
                       if (!item) return;
-                      const supportingPage = item.supporting_evidence.find((evidence) => evidence.page !== null)?.page ?? null;
+                      const supportingPage = item.supporting_evidence.find((evidence) => evidence.page != null)?.page ?? null;
                       onPick({
                         documentUri: row.documentUri,
                         conditionId,
@@ -569,11 +587,13 @@ function EvidenceLedgerPanel({
   document,
   items,
   loading,
+  warning,
   onPick
 }: {
   document: DocumentResultItem | null;
   items: LedgerEvidenceItem[];
   loading: boolean;
+  warning: string | null;
   onPick: (target: PreviewTarget) => void;
 }) {
   return (
@@ -585,6 +605,12 @@ function EvidenceLedgerPanel({
         </div>
         <span>{items.length} 条</span>
       </div>
+      {warning ? (
+        <div className="phase3-warning" role="status">
+          <strong>证据账本数据加载失败</strong>
+          <span>{warning}</span>
+        </div>
+      ) : null}
       {loading ? (
         <div className="empty-state compact">
           <strong>正在加载证据账本</strong>
@@ -620,7 +646,7 @@ function EvidenceLedgerPanel({
                 <span>{ledgerToolLabel(item.source_tool)}</span>
               </div>
               <div>
-                <strong>{item.page !== null ? `第 ${item.page} 页` : '页码未知'}</strong>
+                <strong>{item.page != null ? `第 ${item.page} 页` : '页码未知'}</strong>
                 <span>{item.used_for_decision ? '参与判定' : '仅检索'}</span>
               </div>
             </button>
@@ -864,7 +890,7 @@ function EvidencePanel({ document, taskId, onReviewed }: { document: DocumentRes
               <article className="snippet-item" key={`${item.condition_id}-${index}`}>
                 <div className="snippet-head">
                   <strong>{item.condition_id}</strong>
-                  <span>{item.page ? `第 ${item.page} 页` : '页码未知'}</span>
+                  <span>{item.page != null ? `第 ${item.page} 页` : '页码未知'}</span>
                 </div>
                 <p>{item.text}</p>
                 {item.artifact_ref ? <small>{item.artifact_ref}</small> : null}

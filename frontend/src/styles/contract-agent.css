@@ -576,6 +576,18 @@ h1 {
   text-align: left;
 }
 
+.phase3-warning {
+  display: grid;
+  gap: 4px;
+  border: 1px solid #f6d7a8;
+  border-radius: 8px;
+  background: #fff8e8;
+  color: #8a5a00;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  font-size: 12px;
+}
+
 .phase3-summary-grid {
   margin: 12px 0 0;
 }
