@@ -70,6 +70,103 @@ class QmdClient:
             )
         return results
 
+    def list_tools(self) -> list[str]:
+        if self._session_id is None:
+            self._initialize()
+        response = self._post(
+            {
+                "jsonrpc": "2.0",
+                "id": self._allocate_id(),
+                "method": "tools/list",
+                "params": {},
+            }
+        )
+        tools = response.get("result", {}).get("tools", [])
+        return [
+            str(item.get("name"))
+            for item in tools
+            if isinstance(item, dict) and item.get("name")
+        ]
+
+    def doc_toc(self, document_uri: str) -> dict[str, Any]:
+        return self._deep_read_tool(
+            "doc_toc",
+            {"document_uri": validate_qmd_document_uri(document_uri)},
+        )
+
+    def doc_grep(self, document_uri: str, pattern: str) -> dict[str, Any]:
+        return self._deep_read_tool(
+            "doc_grep",
+            {"document_uri": validate_qmd_document_uri(document_uri), "pattern": pattern},
+        )
+
+    def doc_read(
+        self,
+        document_uri: str,
+        page: int | None = None,
+        anchor: str | None = None,
+        window: int = 2,
+    ) -> dict[str, Any]:
+        return self._deep_read_tool(
+            "doc_read",
+            {
+                "document_uri": validate_qmd_document_uri(document_uri),
+                "page": page,
+                "anchor": anchor,
+                "window": window,
+            },
+        )
+
+    def doc_query(self, document_uri: str, question: str) -> dict[str, Any]:
+        return self._deep_read_tool(
+            "doc_query",
+            {"document_uri": validate_qmd_document_uri(document_uri), "question": question},
+        )
+
+    def doc_elements(
+        self,
+        document_uri: str,
+        page: int | None = None,
+        anchor: str | None = None,
+    ) -> dict[str, Any]:
+        return self._deep_read_tool(
+            "doc_elements",
+            {
+                "document_uri": validate_qmd_document_uri(document_uri),
+                "page": page,
+                "anchor": anchor,
+            },
+        )
+
+    def document_preview(self, document_uri: str) -> dict[str, Any]:
+        safe_uri = validate_qmd_document_uri(document_uri)
+        payload = self.doc_toc(safe_uri)
+        structured = payload.get("structuredContent")
+        if isinstance(structured, dict):
+            toc = structured.get("toc")
+            return {
+                "document_uri": safe_uri,
+                "document_title": structured.get("title"),
+                "collection": structured.get("collection"),
+                "toc": toc if isinstance(toc, list) else [],
+                "summary": structured.get("summary"),
+                "can_open": bool(structured.get("open_url")),
+                "can_download": bool(structured.get("download_url")),
+                "open_url": structured.get("open_url"),
+                "download_url": structured.get("download_url"),
+            }
+        text = extract_text(payload)
+        return {
+            "document_uri": safe_uri,
+            "toc": [],
+            "summary": text or None,
+            "can_open": False,
+            "can_download": False,
+        }
+
+    def _deep_read_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        return self._call_tool(name, arguments)
+
     def _call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         if self._session_id is None:
             self._initialize()
@@ -192,6 +289,15 @@ def parse_status_collections(text: str) -> list[dict[str, Any]]:
     return collections
 
 
+def validate_qmd_document_uri(document_uri: str) -> str:
+    value = document_uri.strip()
+    if not value.startswith("qmd://"):
+        raise QmdUnavailable("qmd document URI must start with qmd://")
+    if "\x00" in value or ".." in value.split("qmd://", 1)[1].split("/"):
+        raise QmdUnavailable("qmd document URI contains an unsafe path segment")
+    return value
+
+
 def normalize_qmd_file(file_value: str, fallback_collection: str) -> tuple[str, str, str]:
     value = file_value.strip()
     if value.startswith("qmd://"):
@@ -203,7 +309,8 @@ def normalize_qmd_file(file_value: str, fallback_collection: str) -> tuple[str, 
         collection, path = parts[0], parts[1]
     else:
         collection, path = fallback_collection, without_scheme
-    return collection, path, f"qmd://{collection}/{path}"
+    document_uri = validate_qmd_document_uri(f"qmd://{collection}/{path}")
+    return collection, path, document_uri
 
 
 def persist_qmd_results(
