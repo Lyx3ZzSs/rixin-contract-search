@@ -156,8 +156,10 @@ class QmdClient:
             toc = structured.get("toc")
             open_url = structured.get("open_url")
             download_url = structured.get("download_url")
-            open_url = open_url if isinstance(open_url, str) and open_url else None
-            download_url = download_url if isinstance(download_url, str) and download_url else None
+            open_url = open_url.strip() if isinstance(open_url, str) else None
+            download_url = download_url.strip() if isinstance(download_url, str) else None
+            open_url = open_url or None
+            download_url = download_url or None
             return {
                 "document_uri": safe_uri,
                 "document_title": structured.get("title"),
@@ -172,10 +174,14 @@ class QmdClient:
         text = extract_text(payload)
         return {
             "document_uri": safe_uri,
+            "document_title": None,
+            "collection": None,
             "toc": [],
             "summary": text or None,
             "can_open": False,
             "can_download": False,
+            "open_url": None,
+            "download_url": None,
         }
 
     def _deep_read_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:

@@ -223,6 +223,29 @@ def test_document_preview_ignores_non_string_urls(monkeypatch):
     assert preview["download_url"] is None
 
 
+def test_document_preview_ignores_blank_string_urls(monkeypatch):
+    client = QmdClient(url="http://qmd.example/mcp")
+
+    def fake_call_tool(name, arguments):
+        assert name == "doc_toc"
+        return {
+            "structuredContent": {
+                "title": "A采购合同",
+                "open_url": "   ",
+                "download_url": "\t",
+            }
+        }
+
+    monkeypatch.setattr(client, "_call_tool", fake_call_tool)
+
+    preview = client.document_preview("qmd://company_docs/contracts/a.md")
+
+    assert preview["can_open"] is False
+    assert preview["can_download"] is False
+    assert preview["open_url"] is None
+    assert preview["download_url"] is None
+
+
 def test_document_preview_falls_back_to_text_content(monkeypatch):
     client = QmdClient(url="http://qmd.example/mcp")
 
@@ -234,6 +257,14 @@ def test_document_preview_falls_back_to_text_content(monkeypatch):
 
     preview = client.document_preview("qmd://company_docs/contracts/a.md")
 
-    assert preview["document_uri"] == "qmd://company_docs/contracts/a.md"
-    assert preview["summary"] == "第一章 合同标的\n第二章 价款"
-    assert preview["can_download"] is False
+    assert preview == {
+        "document_uri": "qmd://company_docs/contracts/a.md",
+        "document_title": None,
+        "collection": None,
+        "toc": [],
+        "summary": "第一章 合同标的\n第二章 价款",
+        "can_open": False,
+        "can_download": False,
+        "open_url": None,
+        "download_url": None,
+    }
