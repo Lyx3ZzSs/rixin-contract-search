@@ -1,3 +1,4 @@
+from app.models import AuditEvent
 from uuid import uuid4
 
 from app.enums import ConditionVerdictValue, ResultDecision
@@ -70,3 +71,41 @@ def test_evidence_ledger_endpoint_flattens_document_and_verdict_evidence(client,
 
     assert response.status_code == 200
     assert response.json()["items"][0]["role"] == "supporting"
+
+
+def test_qmd_evidence_context_prefers_requested_condition_id(client, monkeypatch, db_session):
+    import app.api.qmd_documents as routes
+
+    session, _ = db_session
+    task = ScreeningTask(id=uuid4(), owner_id="internal-user", title="金额筛选", raw_query="金额大于100万", metrics={})
+    session.add(task)
+    session.commit()
+
+    class FakeQmd:
+        def doc_read(self, document_uri, page=None, anchor=None, window=2):
+            return {
+                "structuredContent": {
+                    "text": "合同总价为人民币120万元",
+                    "anchor": "price",
+                    "page": 3,
+                    "condition_id": "payload-condition",
+                    "source_tool": "doc_read",
+                }
+            }
+
+    monkeypatch.setattr(routes, "QmdClient", lambda: FakeQmd())
+
+    response = client.get(
+        "/api/qmd-documents/evidence-context?document_uri=qmd%3A%2F%2Fcompany_docs%2Fcontracts%2Fa.md&page=7&condition_id=requested-condition"
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["condition_id"] == "requested-condition"
+    assert body["page"] == 3
+    assert body["anchor"] == "price"
+    assert body["source_tool"] == "doc_read"
+
+    audit = session.query(AuditEvent).filter_by(event_type="document_previewed").one()
+    assert audit.payload["condition_id"] == "requested-condition"
+    assert audit.payload["page"] == 3

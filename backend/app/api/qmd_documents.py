@@ -1,4 +1,5 @@
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import RedirectResponse
@@ -42,6 +43,7 @@ def preview(document_uri: str, auth: AuthContext = Depends(get_auth), session: S
 def evidence_context(
     document_uri: str,
     page: int | None = None,
+    condition_id: str | None = None,
     auth: AuthContext = Depends(get_auth),
     session: Session = Depends(get_session),
 ):
@@ -50,7 +52,7 @@ def evidence_context(
     except QmdUnavailable as exc:
         raise ApiError("qmd_preview_unavailable", "QMD preview is unavailable", 404) from exc
 
-    context = _build_evidence_context(document_uri, payload, page=page)
+    context = _build_evidence_context(document_uri, payload, page=page, condition_id=condition_id)
     if context is None:
         raise ApiError("qmd_preview_unavailable", "QMD preview is unavailable", 404)
     write_audit(
@@ -58,6 +60,7 @@ def evidence_context(
         AuditEventType.document_previewed.value,
         {
             "document_uri": document_uri,
+            "condition_id": context.condition_id,
             "page": context.page,
             "anchor": context.anchor,
             "source_tool": context.source_tool.value,
@@ -72,9 +75,8 @@ def evidence_context(
 def open_link(document_uri: str, auth: AuthContext = Depends(get_auth), session: Session = Depends(get_session)):
     preview = _load_preview(document_uri, error_code="qmd_preview_unavailable")
     open_url = preview.get("open_url")
-    if not isinstance(open_url, str) or not open_url.strip():
-        raise ApiError("qmd_preview_unavailable", "QMD preview is unavailable", 404)
-    write_audit(session, AuditEventType.document_opened.value, {"document_uri": document_uri, "open_url": open_url}, actor_id=auth.owner_id)
+    open_url = _safe_redirect_target(open_url, error_code="qmd_preview_unavailable")
+    write_audit(session, AuditEventType.document_opened.value, {"document_uri": document_uri}, actor_id=auth.owner_id)
     session.commit()
     return RedirectResponse(open_url, status_code=307)
 
@@ -83,9 +85,8 @@ def open_link(document_uri: str, auth: AuthContext = Depends(get_auth), session:
 def download(document_uri: str, auth: AuthContext = Depends(get_auth), session: Session = Depends(get_session)):
     preview = _load_preview(document_uri, error_code="qmd_download_unavailable")
     download_url = preview.get("download_url")
-    if not isinstance(download_url, str) or not download_url.strip():
-        raise ApiError("qmd_download_unavailable", "QMD download is unavailable", 404)
-    write_audit(session, AuditEventType.document_downloaded.value, {"document_uri": document_uri, "download_url": download_url}, actor_id=auth.owner_id)
+    download_url = _safe_redirect_target(download_url, error_code="qmd_download_unavailable")
+    write_audit(session, AuditEventType.document_downloaded.value, {"document_uri": document_uri}, actor_id=auth.owner_id)
     session.commit()
     return RedirectResponse(download_url, status_code=307)
 
@@ -97,14 +98,21 @@ def _load_preview(document_uri: str, error_code: str) -> dict[str, Any]:
         raise ApiError(error_code, "QMD preview is unavailable", 404) from exc
 
 
-def _build_evidence_context(document_uri: str, payload: dict[str, Any], *, page: int | None) -> QmdEvidenceContextResponse | None:
+def _build_evidence_context(
+    document_uri: str,
+    payload: dict[str, Any],
+    *,
+    page: int | None,
+    condition_id: str | None,
+) -> QmdEvidenceContextResponse | None:
     structured = payload.get("structuredContent")
     structured = structured if isinstance(structured, dict) else {}
     text = clean_optional_string(structured.get("text")) or extract_text(payload)
     if not text:
         return None
     anchor = clean_optional_string(structured.get("anchor"))
-    condition_id = clean_optional_string(structured.get("condition_id"))
+    structured_condition_id = clean_optional_string(structured.get("condition_id"))
+    caller_condition_id = clean_optional_string(condition_id)
     context_page = structured.get("page")
     if not isinstance(context_page, int):
         context_page = page
@@ -113,9 +121,25 @@ def _build_evidence_context(document_uri: str, payload: dict[str, Any], *, page:
         source_tool = EvidenceSourceTool.doc_read.value
     return QmdEvidenceContextResponse(
         document_uri=document_uri,
-        condition_id=condition_id,
+        condition_id=caller_condition_id or structured_condition_id,
         page=context_page,
         anchor=anchor,
         text=text,
         source_tool=EvidenceSourceTool(source_tool),
     )
+
+
+def _safe_redirect_target(value: Any, *, error_code: str) -> str:
+    target = clean_optional_string(value)
+    if target is None:
+        raise ApiError(error_code, "QMD preview is unavailable", 404)
+    parsed = urlsplit(target)
+    if parsed.scheme or parsed.netloc:
+        raise ApiError(error_code, "QMD preview is unavailable", 404)
+    if not target.startswith("/") or target.startswith("//"):
+        raise ApiError(error_code, "QMD preview is unavailable", 404)
+    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in target):
+        raise ApiError(error_code, "QMD preview is unavailable", 404)
+    if "\\" in target:
+        raise ApiError(error_code, "QMD preview is unavailable", 404)
+    return target
