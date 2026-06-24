@@ -1,5 +1,6 @@
 import csv
 import io
+import json
 from datetime import date, datetime
 
 from openpyxl import Workbook
@@ -23,6 +24,10 @@ EXPORT_COLUMNS = [
     "confidence",
     "matched_conditions",
     "missing_conditions",
+    "decision_basis",
+    "uncertain_reasons",
+    "evidence_support_rate",
+    "verification_status",
     "review_status",
     "review_decision",
     "review_note",
@@ -46,6 +51,10 @@ EXPORT_HEADER_LABELS = {
     "confidence": "置信度",
     "matched_conditions": "命中条件",
     "missing_conditions": "缺失条件",
+    "decision_basis": "条件级判断",
+    "uncertain_reasons": "不确定原因",
+    "evidence_support_rate": "证据支持率",
+    "verification_status": "核验状态",
     "review_status": "复核状态",
     "review_decision": "复核判定",
     "review_note": "复核备注",
@@ -74,6 +83,10 @@ def _spreadsheet_value(value):
     if text.startswith(DANGEROUS_SPREADSHEET_PREFIXES):
         return f"'{text}"
     return text
+
+
+def _json_value(value):
+    return json.dumps(value, ensure_ascii=False, sort_keys=True)
 
 
 def evidence_summary(evidence):
@@ -116,6 +129,10 @@ def export_rows(task: ScreeningTask, results: list[ScreeningDocumentResult]):
             "confidence": _value(result.confidence),
             "matched_conditions": _value(result.matched_conditions),
             "missing_conditions": _value(result.missing_conditions),
+            "decision_basis": _json_value(result.decision_basis),
+            "uncertain_reasons": _value(result.uncertain_reasons),
+            "evidence_support_rate": _value(result.evidence_support_rate),
+            "verification_status": _value(result.verification_status),
             "review_status": _value(result.review_status),
             "review_decision": _value(result.review_decision),
             "review_note": _value(result.review_note),
@@ -182,6 +199,10 @@ def build_json(session: Session, task: ScreeningTask, results: list[ScreeningDoc
                 "agent_reason": result.reason,
                 "matched_conditions": result.matched_conditions,
                 "missing_conditions": result.missing_conditions,
+                "decision_basis": result.decision_basis,
+                "uncertain_reasons": result.uncertain_reasons,
+                "evidence_support_rate": result.evidence_support_rate,
+                "verification_status": result.verification_status,
                 "evidence": result.evidence,
                 "confidence": result.confidence,
                 "review_status": result.review_status,

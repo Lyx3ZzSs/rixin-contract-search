@@ -19,6 +19,10 @@ MATCHED_CONDITIONS = "命中条件"
 REVIEW_DECISION = "复核判定"
 REVIEW_NOTE = "复核备注"
 REVIEWER_NAME = "复核人"
+DECISION_BASIS = "条件级判断"
+UNCERTAIN_REASONS = "不确定原因"
+EVIDENCE_SUPPORT_RATE = "证据支持率"
+VERIFICATION_STATUS = "核验状态"
 EVIDENCE_SUMMARY = "证据摘要"
 
 
@@ -47,6 +51,10 @@ def seeded_export_task(session):
             reason="Agent matched",
             matched_conditions=["gpu"],
             missing_conditions=[],
+            decision_basis={"amount": "satisfied"},
+            uncertain_reasons=[],
+            evidence_support_rate=1.0,
+            verification_status="deep_read_verified",
             evidence=[{"page": 1, "text": "GPU服务器 4台", "source": "qmd", "score": 0.93, "condition_id": "gpu", "artifact_ref": "qmd://contract_docs/equipment-purchase-contract.md"}],
             confidence=0.9,
             review_status=ReviewStatus.reviewed.value,
@@ -139,6 +147,9 @@ def test_export_csv_contains_business_columns(client, db_session):
     rows = csv_rows(response)
     assert rows[0][TASK_TITLE] == "GPU采购"
     assert rows[0][AGENT_DECISION] == "included"
+    assert rows[0][DECISION_BASIS] == '{"amount": "satisfied"}'
+    assert rows[0][EVIDENCE_SUPPORT_RATE] == "1.0"
+    assert rows[0][VERIFICATION_STATUS] == "deep_read_verified"
     assert rows[0][REVIEW_DECISION] == "included"
     assert rows[0][REVIEWER_NAME] == "张三"
     assert "GPU服务器 4台" in rows[0][EVIDENCE_SUMMARY]
@@ -190,6 +201,8 @@ def test_export_json_contains_task_plan_results_events(client, db_session):
     assert payload["task"]["error_message"] is None
     assert payload["plan"]["conditions"][0]["id"] == "gpu"
     assert payload["results"][0]["reviewer_name"] == "张三"
+    assert payload["results"][0]["verification_status"] == "deep_read_verified"
+    assert payload["results"][0]["decision_basis"] == {"amount": "satisfied"}
     assert payload["events"][0]["type"] == "task_created"
 
 
