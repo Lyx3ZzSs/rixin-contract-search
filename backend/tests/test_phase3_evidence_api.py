@@ -119,5 +119,10 @@ def test_qmd_evidence_context_prefers_requested_condition_id(client, monkeypatch
     assert body["source_tool"] == "doc_read"
 
     audit = session.query(AuditEvent).filter_by(event_type="document_previewed").one()
+    assert audit.task_id == task.id
+    assert audit.payload["document_uri"] == "qmd://company_docs/contracts/a.md"
+    assert audit.payload["task_id"] == str(task.id)
     assert audit.payload["condition_id"] == "requested-condition"
     assert audit.payload["page"] == 3
+    assert audit.payload["anchor"] == "price"
+    assert audit.payload["source_tool"] == "doc_read"

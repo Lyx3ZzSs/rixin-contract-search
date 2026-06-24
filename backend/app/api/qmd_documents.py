@@ -22,7 +22,7 @@ router = APIRouter()
 
 @router.get("/preview", response_model=QmdDocumentPreviewResponse)
 def preview(task_id: UUID, document_uri: str, auth: AuthContext = Depends(get_auth), session: Session = Depends(get_session)):
-    _load_owned_qmd_task(session, task_id, document_uri, auth)
+    task = _load_owned_qmd_task(session, task_id, document_uri, auth)
     try:
         preview_payload = dict(QmdClient().document_preview(document_uri))
     except QmdUnavailable as exc:
@@ -35,12 +35,11 @@ def preview(task_id: UUID, document_uri: str, auth: AuthContext = Depends(get_au
         AuditEventType.document_previewed.value,
         {
             "document_uri": document_uri,
-            "document_title": preview_payload.get("document_title"),
-            "collection": preview_payload.get("collection"),
-            "can_open": preview_payload.get("can_open", False),
-            "can_download": preview_payload.get("can_download", False),
+            "task_id": str(task.id),
+            "source_tool": "document_preview",
         },
         actor_id=auth.owner_id,
+        task=task,
     )
     session.commit()
     return preview_payload
@@ -55,7 +54,7 @@ def evidence_context(
     auth: AuthContext = Depends(get_auth),
     session: Session = Depends(get_session),
 ):
-    _load_owned_qmd_task(session, task_id, document_uri, auth)
+    task = _load_owned_qmd_task(session, task_id, document_uri, auth)
     try:
         payload = QmdClient().doc_read(document_uri, page=page, anchor=None, window=2)
     except QmdUnavailable as exc:
@@ -69,12 +68,14 @@ def evidence_context(
         AuditEventType.document_previewed.value,
         {
             "document_uri": document_uri,
+            "task_id": str(task.id),
             "condition_id": context.condition_id,
             "page": context.page,
             "anchor": context.anchor,
             "source_tool": context.source_tool.value,
         },
         actor_id=auth.owner_id,
+        task=task,
     )
     session.commit()
     return context
@@ -82,22 +83,42 @@ def evidence_context(
 
 @router.get("/open-link")
 def open_link(task_id: UUID, document_uri: str, auth: AuthContext = Depends(get_auth), session: Session = Depends(get_session)):
-    _load_owned_qmd_task(session, task_id, document_uri, auth)
+    task = _load_owned_qmd_task(session, task_id, document_uri, auth)
     preview = _load_preview(document_uri, error_code="qmd_preview_unavailable")
     open_url = preview.get("open_url")
     open_url = _safe_redirect_target(open_url, error_code="qmd_preview_unavailable")
-    write_audit(session, AuditEventType.document_opened.value, {"document_uri": document_uri}, actor_id=auth.owner_id)
+    write_audit(
+        session,
+        AuditEventType.document_opened.value,
+        {
+            "document_uri": document_uri,
+            "task_id": str(task.id),
+            "source_tool": "open_link",
+        },
+        actor_id=auth.owner_id,
+        task=task,
+    )
     session.commit()
     return RedirectResponse(open_url, status_code=307)
 
 
 @router.get("/download")
 def download(task_id: UUID, document_uri: str, auth: AuthContext = Depends(get_auth), session: Session = Depends(get_session)):
-    _load_owned_qmd_task(session, task_id, document_uri, auth)
+    task = _load_owned_qmd_task(session, task_id, document_uri, auth)
     preview = _load_preview(document_uri, error_code="qmd_download_unavailable")
     download_url = preview.get("download_url")
     download_url = _safe_redirect_target(download_url, error_code="qmd_download_unavailable")
-    write_audit(session, AuditEventType.document_downloaded.value, {"document_uri": document_uri}, actor_id=auth.owner_id)
+    write_audit(
+        session,
+        AuditEventType.document_downloaded.value,
+        {
+            "document_uri": document_uri,
+            "task_id": str(task.id),
+            "source_tool": "download",
+        },
+        actor_id=auth.owner_id,
+        task=task,
+    )
     session.commit()
     return RedirectResponse(download_url, status_code=307)
 

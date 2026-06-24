@@ -125,8 +125,12 @@ def test_qmd_document_preview_does_not_advertise_absolute_redirects(client, db_s
     assert body["can_download"] is False
 
     audit = session.query(AuditEvent).filter_by(event_type="document_previewed").one()
-    assert audit.payload["can_open"] is False
-    assert audit.payload["can_download"] is False
+    assert audit.task_id == task.id
+    assert audit.payload == {
+        "document_uri": "qmd://company_docs/contracts/a.md",
+        "task_id": str(task.id),
+        "source_tool": "document_preview",
+    }
 
 
 def test_qmd_document_redirect_rejects_hostile_targets(client, db_session, monkeypatch):
@@ -183,7 +187,12 @@ def test_qmd_document_redirect_audit_excludes_destination_urls(client, db_sessio
     assert response.headers["location"] == "/viewer?document_uri=qmd%3A%2F%2Fcompany_docs%2Fcontracts%2Fa.md"
 
     audit = session.query(AuditEvent).filter_by(event_type="document_opened").one()
-    assert audit.payload == {"document_uri": "qmd://company_docs/contracts/a.md"}
+    assert audit.task_id == task.id
+    assert audit.payload == {
+        "document_uri": "qmd://company_docs/contracts/a.md",
+        "task_id": str(task.id),
+        "source_tool": "open_link",
+    }
 
     response = client.get(
         f"/api/qmd-documents/download?task_id={task.id}&document_uri=qmd%3A%2F%2Fcompany_docs%2Fcontracts%2Fa.md",
@@ -194,7 +203,12 @@ def test_qmd_document_redirect_audit_excludes_destination_urls(client, db_sessio
     assert response.headers["location"] == "/download/qmd%3A%2F%2Fcompany_docs%2Fcontracts%2Fa.md"
 
     audit = session.query(AuditEvent).filter_by(event_type="document_downloaded").one()
-    assert audit.payload == {"document_uri": "qmd://company_docs/contracts/a.md"}
+    assert audit.task_id == task.id
+    assert audit.payload == {
+        "document_uri": "qmd://company_docs/contracts/a.md",
+        "task_id": str(task.id),
+        "source_tool": "download",
+    }
 
 
 def test_qmd_document_preview_rejects_other_users_task(client, db_session, monkeypatch):
