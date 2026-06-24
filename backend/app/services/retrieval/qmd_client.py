@@ -159,10 +159,8 @@ class QmdClient:
             summary = clean_optional_string(structured.get("summary"))
             open_url = structured.get("open_url")
             download_url = structured.get("download_url")
-            open_url = open_url.strip() if isinstance(open_url, str) else None
-            download_url = download_url.strip() if isinstance(download_url, str) else None
-            open_url = open_url or None
-            download_url = download_url or None
+            open_url = sanitize_preview_url(open_url)
+            download_url = sanitize_preview_url(download_url)
             return {
                 "document_uri": safe_uri,
                 "document_title": document_title,
@@ -318,6 +316,8 @@ def validate_qmd_document_uri(document_uri: str) -> str:
         raise QmdUnavailable("qmd document URI contains surrounding whitespace")
     if contains_control_character(value):
         raise QmdUnavailable("qmd document URI contains an unsafe control character")
+    if "?" in value or "#" in value:
+        raise QmdUnavailable("qmd document URI must not include query or fragment")
     try:
         parsed = urlsplit(value)
     except ValueError as exc:
@@ -363,6 +363,17 @@ def clean_optional_string(value: Any) -> str | None:
         return None
     value = value.strip()
     return value or None
+
+
+def sanitize_preview_url(value: Any) -> str | None:
+    value = clean_optional_string(value)
+    if value is None:
+        return None
+    if value.startswith(("http://", "https://")):
+        return value
+    if value.startswith("/") and not value.startswith("//"):
+        return value
+    return None
 
 
 def strict_percent_decode(value: str) -> str:

@@ -74,6 +74,8 @@ def test_normalize_qmd_file_rejects_path_escape():
         "qmd://company_docs/contracts/%FF.md",
         "qmd://company_docs/contracts/a.md?x=1",
         "qmd://company_docs/contracts/a.md#frag",
+        "qmd://company_docs/contracts/a.md?",
+        "qmd://company_docs/contracts/a.md#",
         "qmd://user@company_docs/contracts/a.md",
         "qmd://company_docs:bad/contracts/a.md",
         "qmd://company_docs/contracts/a\n.md",
@@ -211,6 +213,62 @@ def test_document_preview_maps_structured_content(monkeypatch):
         "open_url": "https://qmd.example/open/a",
         "download_url": "https://qmd.example/download/a",
     }
+
+
+def test_document_preview_allows_safe_urls(monkeypatch):
+    client = QmdClient(url="http://qmd.example/mcp")
+
+    def fake_call_tool(name, arguments):
+        assert name == "doc_toc"
+        return {
+            "structuredContent": {
+                "open_url": " http://qmd.example/open/a ",
+                "download_url": "/download/a",
+            }
+        }
+
+    monkeypatch.setattr(client, "_call_tool", fake_call_tool)
+
+    preview = client.document_preview("qmd://company_docs/contracts/a.md")
+
+    assert preview["can_open"] is True
+    assert preview["can_download"] is True
+    assert preview["open_url"] == "http://qmd.example/open/a"
+    assert preview["download_url"] == "/download/a"
+
+
+@pytest.mark.parametrize(
+    "open_url,download_url",
+    [
+        ("javascript:alert(1)", "https://qmd.example/download/a"),
+        ("https://qmd.example/open/a", "data:text/plain,hello"),
+        ("//example.com/open/a", "//example.com/download/a"),
+    ],
+)
+def test_document_preview_rejects_unsafe_url_schemes(monkeypatch, open_url, download_url):
+    client = QmdClient(url="http://qmd.example/mcp")
+
+    def fake_call_tool(name, arguments):
+        assert name == "doc_toc"
+        return {
+            "structuredContent": {
+                "open_url": open_url,
+                "download_url": download_url,
+            }
+        }
+
+    monkeypatch.setattr(client, "_call_tool", fake_call_tool)
+
+    preview = client.document_preview("qmd://company_docs/contracts/a.md")
+
+    assert preview["open_url"] in {"https://qmd.example/open/a", None}
+    assert preview["download_url"] in {"https://qmd.example/download/a", None}
+    if open_url != "https://qmd.example/open/a":
+        assert preview["can_open"] is False
+        assert preview["open_url"] is None
+    if download_url != "https://qmd.example/download/a":
+        assert preview["can_download"] is False
+        assert preview["download_url"] is None
 
 
 def test_document_preview_ignores_non_string_urls(monkeypatch):
