@@ -50,9 +50,9 @@ def _prediction_support_rate(prediction: dict) -> float:
 
 
 def compute_eval_metrics(cases: list[dict], schema_failures: int = 0, verification_failures: int = 0) -> dict[str, float]:
-    schema_failures = max(0, schema_failures)
-    verification_failures = max(0, verification_failures)
     total_cases = len(cases)
+    schema_failures = max(0, min(schema_failures, total_cases))
+    verification_failures = max(0, min(verification_failures, total_cases))
     total_predictions = 0
     predicted_included = 0
     true_positive = 0

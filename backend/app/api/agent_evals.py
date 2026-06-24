@@ -5,7 +5,7 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -26,11 +26,30 @@ class AgentEvalPrediction(BaseModel):
     evidence_support_rate: float = Field(ge=0.0, le=1.0)
     verification_status: VerificationStatus | None = None
 
+    @field_validator("document_uri")
+    @classmethod
+    def normalize_document_uri(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("document_uri is required")
+        return value
+
 
 class AgentEvalExpected(BaseModel):
     included: list[str] = Field(default_factory=list)
     excluded: list[str] = Field(default_factory=list)
     uncertain: list[str] = Field(default_factory=list)
+
+    @field_validator("included", "excluded", "uncertain")
+    @classmethod
+    def normalize_uri_list(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for document_uri in value:
+            document_uri = document_uri.strip()
+            if not document_uri:
+                raise ValueError("document_uri entries are required")
+            normalized.append(document_uri)
+        return normalized
 
 
 class AgentEvalCase(BaseModel):

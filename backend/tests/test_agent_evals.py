@@ -53,6 +53,20 @@ def test_compute_eval_metrics_clamps_negative_failure_counts():
     assert metrics["verification_failure_rate"] == 0.0
 
 
+def test_compute_eval_metrics_clamps_failure_counts_to_case_count():
+    cases = [
+        {
+            "expected": {"included": ["qmd://docs/a.md"], "excluded": [], "uncertain": []},
+            "actual": [],
+        }
+    ]
+
+    metrics = compute_eval_metrics(cases, schema_failures=5, verification_failures=5)
+
+    assert metrics["schema_failure_rate"] == 1.0
+    assert metrics["verification_failure_rate"] == 1.0
+
+
 def test_agent_eval_run_endpoint_persists_metrics_and_cases(client, db_session):
     session, _ = db_session
     calls = {"count": 0}
@@ -107,6 +121,60 @@ def test_agent_eval_run_endpoint_persists_metrics_and_cases(client, db_session):
         assert calls["count"] == 1
     finally:
         app.dependency_overrides.pop(get_auth, None)
+
+
+def test_agent_eval_run_endpoint_clamps_failure_counts(client):
+    response = client.post(
+        "/api/agent-evals/run",
+        json={
+            "cases": [
+                {
+                    "name": "金额筛选",
+                    "raw_query": "金额大于100万",
+                    "expected": {"included": ["qmd://docs/a.md"], "excluded": [], "uncertain": []},
+                    "actual": [],
+                }
+            ],
+            "schema_failures": 5,
+            "verification_failures": 5,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["metrics"]["schema_failure_rate"] == 1.0
+    assert body["metrics"]["verification_failure_rate"] == 1.0
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "cases": [
+                {
+                    "name": "金额筛选",
+                    "raw_query": "金额大于100万",
+                    "expected": {"included": ["qmd://docs/a.md"], "excluded": [], "uncertain": []},
+                    "actual": [{"document_uri": "   ", "decision": "included", "evidence_support_rate": 1.0, "verification_status": "deep_read_verified"}],
+                }
+            ]
+        },
+        {
+            "cases": [
+                {
+                    "name": "金额筛选",
+                    "raw_query": "金额大于100万",
+                    "expected": {"included": ["   "], "excluded": [], "uncertain": []},
+                    "actual": [{"document_uri": "qmd://docs/a.md", "decision": "included", "evidence_support_rate": 1.0, "verification_status": "deep_read_verified"}],
+                }
+            ]
+        },
+    ],
+)
+def test_agent_eval_run_rejects_empty_document_uris(client, payload):
+    response = client.post("/api/agent-evals/run", json=payload)
+
+    assert response.status_code == 422
 
 
 def test_agent_eval_run_get_is_scoped_to_run_creator(client, db_session):
