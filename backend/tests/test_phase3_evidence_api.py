@@ -79,6 +79,18 @@ def test_qmd_evidence_context_prefers_requested_condition_id(client, monkeypatch
     session, _ = db_session
     task = ScreeningTask(id=uuid4(), owner_id="internal-user", title="金额筛选", raw_query="金额大于100万", metrics={})
     session.add(task)
+    session.add(
+        ConditionVerdict(
+            task_id=task.id,
+            document_uri="qmd://company_docs/contracts/a.md",
+            condition_id="amount",
+            verdict=ConditionVerdictValue.satisfied.value,
+            confidence=0.9,
+            supporting_evidence=[],
+            contradicting_evidence=[],
+            verification_method="grep_then_read",
+        )
+    )
     session.commit()
 
     class FakeQmd:
@@ -96,7 +108,7 @@ def test_qmd_evidence_context_prefers_requested_condition_id(client, monkeypatch
     monkeypatch.setattr(routes, "QmdClient", lambda: FakeQmd())
 
     response = client.get(
-        "/api/qmd-documents/evidence-context?document_uri=qmd%3A%2F%2Fcompany_docs%2Fcontracts%2Fa.md&page=7&condition_id=requested-condition"
+        f"/api/qmd-documents/evidence-context?task_id={task.id}&document_uri=qmd%3A%2F%2Fcompany_docs%2Fcontracts%2Fa.md&page=7&condition_id=requested-condition"
     )
 
     assert response.status_code == 200

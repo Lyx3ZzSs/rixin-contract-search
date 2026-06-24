@@ -1,14 +1,18 @@
 from typing import Any
 from urllib.parse import urlsplit
+from uuid import UUID
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import RedirectResponse
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.auth import AuthContext, get_auth
+from app.api.screening_tasks import load_owned_task
 from app.db import get_session
 from app.enums import AuditEventType, EvidenceSourceTool
 from app.errors import ApiError
+from app.models import ConditionVerdict, ScreeningDocumentResult
 from app.schemas import QmdDocumentPreviewResponse, QmdEvidenceContextResponse
 from app.services.audit import write_audit
 from app.services.retrieval.qmd_client import QmdClient, QmdUnavailable, clean_optional_string, extract_text
@@ -17,11 +21,14 @@ router = APIRouter()
 
 
 @router.get("/preview", response_model=QmdDocumentPreviewResponse)
-def preview(document_uri: str, auth: AuthContext = Depends(get_auth), session: Session = Depends(get_session)):
+def preview(task_id: UUID, document_uri: str, auth: AuthContext = Depends(get_auth), session: Session = Depends(get_session)):
+    _load_owned_qmd_task(session, task_id, document_uri, auth)
     try:
-        preview_payload = QmdClient().document_preview(document_uri)
+        preview_payload = dict(QmdClient().document_preview(document_uri))
     except QmdUnavailable as exc:
         raise ApiError("qmd_preview_unavailable", "QMD preview is unavailable", 404) from exc
+    preview_payload["can_open"] = bool(preview_payload.get("can_open", False)) and _is_api_redirect_target(preview_payload.get("open_url"))
+    preview_payload["can_download"] = bool(preview_payload.get("can_download", False)) and _is_api_redirect_target(preview_payload.get("download_url"))
 
     write_audit(
         session,
@@ -41,12 +48,14 @@ def preview(document_uri: str, auth: AuthContext = Depends(get_auth), session: S
 
 @router.get("/evidence-context", response_model=QmdEvidenceContextResponse)
 def evidence_context(
+    task_id: UUID,
     document_uri: str,
     page: int | None = None,
     condition_id: str | None = None,
     auth: AuthContext = Depends(get_auth),
     session: Session = Depends(get_session),
 ):
+    _load_owned_qmd_task(session, task_id, document_uri, auth)
     try:
         payload = QmdClient().doc_read(document_uri, page=page, anchor=None, window=2)
     except QmdUnavailable as exc:
@@ -72,7 +81,8 @@ def evidence_context(
 
 
 @router.get("/open-link")
-def open_link(document_uri: str, auth: AuthContext = Depends(get_auth), session: Session = Depends(get_session)):
+def open_link(task_id: UUID, document_uri: str, auth: AuthContext = Depends(get_auth), session: Session = Depends(get_session)):
+    _load_owned_qmd_task(session, task_id, document_uri, auth)
     preview = _load_preview(document_uri, error_code="qmd_preview_unavailable")
     open_url = preview.get("open_url")
     open_url = _safe_redirect_target(open_url, error_code="qmd_preview_unavailable")
@@ -82,7 +92,8 @@ def open_link(document_uri: str, auth: AuthContext = Depends(get_auth), session:
 
 
 @router.get("/download")
-def download(document_uri: str, auth: AuthContext = Depends(get_auth), session: Session = Depends(get_session)):
+def download(task_id: UUID, document_uri: str, auth: AuthContext = Depends(get_auth), session: Session = Depends(get_session)):
+    _load_owned_qmd_task(session, task_id, document_uri, auth)
     preview = _load_preview(document_uri, error_code="qmd_download_unavailable")
     download_url = preview.get("download_url")
     download_url = _safe_redirect_target(download_url, error_code="qmd_download_unavailable")
@@ -96,6 +107,32 @@ def _load_preview(document_uri: str, error_code: str) -> dict[str, Any]:
         return QmdClient().document_preview(document_uri)
     except QmdUnavailable as exc:
         raise ApiError(error_code, "QMD preview is unavailable", 404) from exc
+
+
+def _load_owned_qmd_task(session: Session, task_id: UUID, document_uri: str, auth: AuthContext):
+    task = load_owned_task(session, task_id, auth)
+    if not _document_uri_is_associated(session, task.id, document_uri):
+        raise ApiError("not_found", "Not found", 404)
+    return task
+
+
+def _document_uri_is_associated(session: Session, task_id: UUID, document_uri: str) -> bool:
+    if session.scalar(
+        select(ScreeningDocumentResult.id).where(
+            ScreeningDocumentResult.task_id == task_id,
+            ScreeningDocumentResult.document_uri == document_uri,
+        )
+    ) is not None:
+        return True
+    return (
+        session.scalar(
+            select(ConditionVerdict.id).where(
+                ConditionVerdict.task_id == task_id,
+                ConditionVerdict.document_uri == document_uri,
+            )
+        )
+        is not None
+    )
 
 
 def _build_evidence_context(
@@ -143,3 +180,19 @@ def _safe_redirect_target(value: Any, *, error_code: str) -> str:
     if "\\" in target:
         raise ApiError(error_code, "QMD preview is unavailable", 404)
     return target
+
+
+def _is_api_redirect_target(value: Any) -> bool:
+    target = clean_optional_string(value)
+    if target is None:
+        return False
+    parsed = urlsplit(target)
+    if parsed.scheme or parsed.netloc:
+        return False
+    if not target.startswith("/") or target.startswith("//"):
+        return False
+    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in target):
+        return False
+    if "\\" in target:
+        return False
+    return True
