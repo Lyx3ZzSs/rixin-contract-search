@@ -155,6 +155,17 @@ class ForgedContradictingEvidenceLlm(VerdictLlm):
         }
 
 
+class ConflictingWithoutEvidenceLlm(VerdictLlm):
+    def judge_condition(self, plan, condition, document, evidence):
+        return {
+            "verdict": "conflicting",
+            "confidence": 0.41,
+            "supporting_evidence": [],
+            "contradicting_evidence": [],
+            "missing_reason": None,
+        }
+
+
 class StrictCountVerdictLlm(VerdictLlm):
     def plan(self, raw_query: str):
         return ScreeningPlanPayload(
@@ -425,12 +436,44 @@ def test_agent_preserves_matching_contradicting_evidence_and_rejects_forged_cont
     ContractScreeningAgent(llm=ForgedContradictingEvidenceLlm(), qmd=DeepReadQmd(), collections=["company_docs"], top_k=5, max_retrieval_rounds=1).run(session, task)
 
     verdict = session.scalars(select(ConditionVerdict).where(ConditionVerdict.task_id == task.id)).one()
-    assert verdict.verdict == ConditionVerdictValue.conflicting.value
+    assert verdict.verdict == ConditionVerdictValue.unknown.value
     assert verdict.contradicting_evidence == []
 
     result = session.scalars(select(ScreeningDocumentResult).where(ScreeningDocumentResult.task_id == task.id)).one()
     assert result.decision == ResultDecision.uncertain.value
-    assert UncertainReason.conflicting_evidence.value in result.uncertain_reasons
+    assert UncertainReason.missing_evidence.value in result.uncertain_reasons
+    assert UncertainReason.conflicting_evidence.value not in result.uncertain_reasons
+
+
+def test_agent_downgrades_conflicting_verdict_without_trusted_contradicting_evidence(db_session):
+    from app.services.agent.langgraph_agent import ContractScreeningAgent
+
+    session, _ = db_session
+    task = ScreeningTask(
+        id=uuid4(),
+        owner_id="internal-user",
+        title="金额筛选",
+        raw_query="筛选合同总价大于等于100万元的合同",
+        status=TaskStatus.retrieving.value,
+        current_stage=TaskStatus.retrieving.value,
+        progress_percent=10,
+        metrics={},
+    )
+    session.add(task)
+    session.commit()
+
+    ContractScreeningAgent(llm=ConflictingWithoutEvidenceLlm(), qmd=DeepReadQmd(), collections=["company_docs"], top_k=5, max_retrieval_rounds=1).run(session, task)
+
+    verdict = session.scalars(select(ConditionVerdict).where(ConditionVerdict.task_id == task.id)).one()
+    assert verdict.verdict == ConditionVerdictValue.unknown.value
+    assert verdict.confidence == 0.0
+    assert verdict.contradicting_evidence == []
+    assert verdict.missing_reason == "contradicting_evidence_required"
+
+    result = session.scalars(select(ScreeningDocumentResult).where(ScreeningDocumentResult.task_id == task.id)).one()
+    assert result.decision == ResultDecision.uncertain.value
+    assert UncertainReason.missing_evidence.value in result.uncertain_reasons
+    assert UncertainReason.conflicting_evidence.value not in result.uncertain_reasons
 
 
 def test_agent_requires_minimum_supporting_evidence_count(db_session):

@@ -128,6 +128,10 @@ def _normalize_raw_verdict(
     required_evidence_count = max(1, int(getattr(condition, "required_evidence_count", 1) or getattr(condition, "evidence_required", 1) or 1))
     trusted_supporting_count = len(supporting)
 
+    if verdict == ConditionVerdictValue.conflicting.value and not contradicting:
+        verdict = ConditionVerdictValue.unknown.value
+        missing_reason = missing_reason or "contradicting_evidence_required"
+
     if not supporting:
         if evidence_reason == "verification_failed":
             verdict = ConditionVerdictValue.unknown.value
@@ -146,7 +150,7 @@ def _normalize_raw_verdict(
     if verdict == ConditionVerdictValue.unknown.value and not supporting and missing_reason is None:
         missing_reason = "supporting_evidence_required"
     confidence = _clamp_confidence(raw.get("confidence", 0.0))
-    if verdict == ConditionVerdictValue.unknown.value and (not supporting or trusted_supporting_count < required_evidence_count):
+    if verdict == ConditionVerdictValue.unknown.value and (not supporting or trusted_supporting_count < required_evidence_count or not contradicting):
         confidence = 0.0
     return {
         "verdict": verdict,
