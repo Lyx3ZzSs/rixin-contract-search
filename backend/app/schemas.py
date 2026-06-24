@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.enums import (
     ConditionOperator,
@@ -141,7 +141,7 @@ class DocumentResultItem(BaseModel):
     reviewed_at: datetime | None = None
     decision_basis: dict[str, Any] = Field(default_factory=dict)
     uncertain_reasons: list[UncertainReason] = Field(default_factory=list)
-    evidence_support_rate: float = 0.0
+    evidence_support_rate: float = Field(default=0.0, ge=0.0, le=1.0)
     verification_status: VerificationStatus = VerificationStatus.query_only
     created_at: datetime
     updated_at: datetime
@@ -199,10 +199,29 @@ class ScreeningCondition(BaseModel):
     required_evidence_count: int = 1
     negative_evidence_allowed: bool = False
 
+    @model_validator(mode="before")
+    @classmethod
+    def sync_evidence_count_aliases(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+
+        data = dict(data)
+        if "required_evidence_count" in data and "evidence_required" not in data:
+            data["evidence_required"] = data["required_evidence_count"]
+        elif "evidence_required" in data and "required_evidence_count" not in data:
+            data["required_evidence_count"] = data["evidence_required"]
+        return data
+
+    @model_validator(mode="after")
+    def keep_evidence_count_aliases_in_sync(self) -> "ScreeningCondition":
+        if self.evidence_required != self.required_evidence_count:
+            self.evidence_required = self.required_evidence_count
+        return self
+
 
 class ScreeningPlanPayload(BaseModel):
     target: Literal["qmd_document"] = "qmd_document"
-    plan_version: int = 1
+    plan_version: Literal[1, 2] = 1
     conditions: list[ScreeningCondition] = Field(min_length=1)
     decision_policy: Literal[
         "phase1_keyword_candidate_uncertain_on_structured_comparison",
@@ -275,9 +294,9 @@ class QmdEvidenceContextResponse(BaseModel):
 
 
 class AgentEvalMetrics(BaseModel):
-    precision: float
-    recall: float
-    uncertain_rate: float
-    evidence_support_rate: float
-    schema_failure_rate: float
-    verification_failure_rate: float
+    precision: float = Field(ge=0.0, le=1.0)
+    recall: float = Field(ge=0.0, le=1.0)
+    uncertain_rate: float = Field(ge=0.0, le=1.0)
+    evidence_support_rate: float = Field(ge=0.0, le=1.0)
+    schema_failure_rate: float = Field(ge=0.0, le=1.0)
+    verification_failure_rate: float = Field(ge=0.0, le=1.0)
