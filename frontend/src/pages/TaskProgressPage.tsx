@@ -313,7 +313,8 @@ export function TaskProgressPage() {
         <section className="panel-center">
           <ResultSummary summary={visibleSummary} results={visibleResults} />
           <ConditionMatrixPanel
-            document={selectedDocument}
+            documents={filteredDocuments}
+            selectedDocumentUri={selectedDocumentUri}
             verdicts={verdicts}
             onPick={(target) => {
               setSelectedUri(target.documentUri);
@@ -474,17 +475,18 @@ function DocumentCard({ document, selected, onSelect }: { document: DocumentResu
 }
 
 function ConditionMatrixPanel({
-  document,
+  documents,
+  selectedDocumentUri,
   verdicts,
   onPick
 }: {
-  document: DocumentResultItem | null;
+  documents: DocumentResultItem[];
+  selectedDocumentUri: string | null;
   verdicts: ConditionVerdictItem[];
   onPick: (target: PreviewTarget) => void;
 }) {
-  const matrix = buildVerdictMatrix(verdicts);
+  const matrix = buildVerdictMatrix(documents, verdicts);
   const columns = matrix.columns;
-  const rows = document ? matrix.rows.filter((row) => row.documentUri === document.document_uri) : matrix.rows;
   const gridTemplateColumns = [`minmax(220px, 1.2fr)`, ...columns.map(() => 'minmax(96px, 1fr)')].join(' ');
 
   return (
@@ -492,11 +494,11 @@ function ConditionMatrixPanel({
       <div className="section-title-row">
         <div>
           <h2>条件矩阵</h2>
-          <span>{document ? `当前文档：${document.document_title || document.document_path}` : '按任务汇总所有文档的条件判定'}</span>
+          <span>{documents.length ? `当前筛选 ${documents.length} 份文档的条件判定` : '按任务汇总所有文档的条件判定'}</span>
         </div>
-        <span>{rows.length} 行</span>
+        <span>{matrix.rows.length} 行</span>
       </div>
-      {columns.length === 0 || rows.length === 0 ? (
+      {columns.length === 0 || matrix.rows.length === 0 ? (
         <div className="empty-state compact">
           <strong>暂无条件矩阵</strong>
           <span>任务完成后会显示文档与条件的逐项判定。</span>
@@ -513,9 +515,10 @@ function ConditionMatrixPanel({
               </span>
             ))}
           </div>
-          {rows.map((row) => (
-            <div className="matrix-row" key={row.documentUri} role="row" style={{ gridTemplateColumns }}>
+          {matrix.rows.map((row) => (
+            <div className={`matrix-row ${row.documentUri === selectedDocumentUri ? 'is-selected' : ''}`} key={row.documentUri} role="row" style={{ gridTemplateColumns }}>
               <button
+                aria-current={row.documentUri === selectedDocumentUri ? 'true' : undefined}
                 className="matrix-document-button"
                 type="button"
                 onClick={() =>
@@ -868,7 +871,10 @@ function EvidencePanel({ document, taskId, onReviewed }: { document: DocumentRes
   );
 }
 
-function buildVerdictMatrix(verdicts: ConditionVerdictItem[] = []): {
+function buildVerdictMatrix(
+  documents: DocumentResultItem[] = [],
+  verdicts: ConditionVerdictItem[] = []
+): {
   columns: string[];
   rows: Array<{
     documentUri: string;
@@ -877,7 +883,8 @@ function buildVerdictMatrix(verdicts: ConditionVerdictItem[] = []): {
     items: Map<string, ConditionVerdictItem>;
   }>;
 } {
-  const columns = Array.from(new Set(verdicts.map((item) => item.condition_id))).sort((a, b) => a.localeCompare(b));
+  const allowedDocuments = new Map(documents.map((document) => [document.document_uri, document] as const));
+  const columns = Array.from(new Set(verdicts.filter((item) => allowedDocuments.has(item.document_uri)).map((item) => item.condition_id))).sort((a, b) => a.localeCompare(b));
   const grouped = new Map<
     string,
     {
@@ -888,15 +895,18 @@ function buildVerdictMatrix(verdicts: ConditionVerdictItem[] = []): {
     }
   >();
 
+  for (const document of documents) {
+    grouped.set(document.document_uri, {
+      documentUri: document.document_uri,
+      documentTitle: document.document_title,
+      documentPath: document.document_path,
+      items: new Map()
+    });
+  }
+
   for (const item of verdicts) {
-    if (!grouped.has(item.document_uri)) {
-      grouped.set(item.document_uri, {
-        documentUri: item.document_uri,
-        documentTitle: null,
-        documentPath: item.document_uri,
-        items: new Map()
-      });
-    }
+    if (!allowedDocuments.has(item.document_uri)) continue;
+    if (!grouped.has(item.document_uri)) continue;
     const row = grouped.get(item.document_uri)!;
     row.items.set(item.condition_id, item);
   }

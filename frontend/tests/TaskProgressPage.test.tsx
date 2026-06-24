@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -88,6 +88,72 @@ const results = {
   }
 };
 
+const multiDocumentResults = {
+  ...results,
+  buckets: {
+    included: [
+      results.buckets.included[0],
+      {
+        ...results.buckets.included[0],
+        result_id: 'result-2',
+        document_uri: 'qmd://company_docs/contracts/supplement.md',
+        document_path: 'contracts/supplement.md',
+        document_title: '补充协议',
+        confidence: 0.81,
+        evidence: [
+          {
+            page: 2,
+            text: '补充协议约定价款保持不变',
+            source: 'qmd',
+            score: 0.91,
+            condition_id: 'general_match',
+            artifact_ref: 'qmd://company_docs/contracts/supplement.md'
+          }
+        ]
+      }
+    ],
+    uncertain: [],
+    excluded: []
+  }
+};
+
+const multiDocumentVerdicts = {
+  task_id: 'task-1',
+  items: [
+    {
+      verdict_id: 'verdict-1',
+      task_id: 'task-1',
+      document_uri: 'qmd://company_docs/contracts/purchase.md',
+      condition_id: 'general_match',
+      verdict: 'satisfied',
+      confidence: 0.95,
+      supporting_evidence: results.buckets.included[0].evidence,
+      contradicting_evidence: [],
+      missing_reason: null,
+      verification_method: 'doc_read',
+      created_at: '2026-06-22T00:00:01Z'
+    },
+    {
+      verdict_id: 'verdict-2',
+      task_id: 'task-1',
+      document_uri: 'qmd://company_docs/contracts/supplement.md',
+      condition_id: 'general_match',
+      verdict: 'not_satisfied',
+      confidence: 0.43,
+      supporting_evidence: [],
+      contradicting_evidence: [],
+      missing_reason: '金额表述不完整',
+      verification_method: 'doc_read',
+      created_at: '2026-06-22T00:00:01Z'
+    }
+  ]
+};
+
+const multiDocumentSummary = {
+  ...completedSummary,
+  counts: { documents: 2, included: 2, uncertain: 0, excluded: 0 }
+};
+
 const taskTwoRunningSummary = {
   task_id: 'task-2',
   title: '第二个任务',
@@ -171,6 +237,32 @@ describe('TaskProgressPage', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/screening-tasks/task-1/events', {
       signal: expect.any(AbortSignal)
     });
+  });
+
+  it('shows all filtered documents in the condition matrix', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(multiDocumentSummary))
+      .mockResolvedValueOnce(streamResponse([]))
+      .mockResolvedValueOnce(jsonResponse(multiDocumentSummary))
+      .mockResolvedValueOnce(jsonResponse(multiDocumentResults))
+      .mockResolvedValueOnce(jsonResponse(multiDocumentVerdicts))
+      .mockResolvedValueOnce(jsonResponse({ task_id: 'task-1', items: [] }))
+      .mockResolvedValueOnce(jsonResponse({ document_uri: 'qmd://company_docs/contracts/purchase.md', toc: [], can_open: false, can_download: false }))
+      .mockResolvedValueOnce(jsonResponse({ document_uri: 'qmd://company_docs/contracts/purchase.md', condition_id: null, page: null, anchor: null, text: '合同总价为人民币120万元', source_tool: 'doc_read' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <MemoryRouter initialEntries={['/tasks/task-1']}>
+        <Routes>
+          <Route path="/tasks/:taskId" element={<TaskProgressPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    const matrix = await screen.findByRole('table', { name: '条件矩阵' });
+    expect(within(matrix).getByRole('button', { name: '采购合同' })).toBeInTheDocument();
+    expect(within(matrix).getByRole('button', { name: '补充协议' })).toBeInTheDocument();
   });
 
   it('saves a manual review and updates the selected result', async () => {

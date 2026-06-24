@@ -19,6 +19,16 @@ describe('failureMessage', () => {
     expect(message).toContain('QMD_MCP_URL');
   });
 
+  it.each([
+    ['qmd_deep_read_unavailable', 'MinerU 文档内核验工具不可用'],
+    ['evidence_verification_failed', '候选合同已召回，但文档内证据核验失败'],
+    ['condition_verdict_invalid', '条件级判断结果格式不合法'],
+    ['eval_dataset_invalid', '评测集格式不合法'],
+    ['eval_run_failed', 'Agent 评测运行失败']
+  ])('maps %s to actionable guidance', (code, fragment) => {
+    expect(failureMessage(code)).toContain(fragment);
+  });
+
   it('maps missing qmd collections to collection status guidance', () => {
     const message = failureMessage('qmd_collection_missing');
 
