@@ -179,9 +179,11 @@ class ScreeningCondition(BaseModel):
 
 
 class ScreeningPlanPayload(BaseModel):
-    target: Literal["qmd_document"]
+    target: Literal["qmd_document"] = "qmd_document"
     conditions: list[ScreeningCondition]
-    decision_policy: Literal["phase1_keyword_candidate_uncertain_on_structured_comparison"]
+    decision_policy: Literal[
+        "phase1_keyword_candidate_uncertain_on_structured_comparison"
+    ] = "phase1_keyword_candidate_uncertain_on_structured_comparison"
 
 
 class ContractScreeningDecision(BaseModel):

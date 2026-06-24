@@ -190,7 +190,11 @@ def test_qmd_status_redacts_url_secrets_from_unavailable_error(client, monkeypat
 
     configured_qmd_url = "https://user:qmd-password@qmd.example/mcp/?token=qmd-token"
     normalized_qmd_url = "https://user:qmd-password@qmd.example/mcp?token=qmd-token"
-    runtime_settings = Settings(AGENT_LLM_API_KEY="test-key", QMD_MCP_URL=configured_qmd_url)
+    runtime_settings = Settings(
+        AGENT_LLM_API_KEY="test-key",
+        QMD_MCP_URL=configured_qmd_url,
+        QMD_COLLECTIONS="company_docs",
+    )
 
     class FakeQmdClient:
         def status(self):
