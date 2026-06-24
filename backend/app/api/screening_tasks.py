@@ -10,14 +10,18 @@ from sqlalchemy.orm import Session
 from app.api.auth import AuthContext, get_auth
 from app.application.task_queue import enqueue_screening_task
 from app.db import get_session, utcnow
-from app.enums import AuditEventType, ResultDecision, ReviewStatus, TaskStatus
+from app.enums import AuditEventType, ConditionVerdictValue, ResultDecision, ReviewStatus, TaskStatus
 from app.errors import ApiError
-from app.models import ScreeningDocumentResult, ScreeningTask, StreamEvent
+from app.models import ConditionVerdict, ScreeningDocumentResult, ScreeningTask, StreamEvent
 from app.schemas import (
+    ConditionVerdictItem,
+    ConditionVerdictResponse,
     CreateScreeningTaskRequest,
     CreateTaskResponse,
     DocumentResultItem,
     EvidenceItem,
+    EvidenceLedgerResponse,
+    LedgerEvidenceItem,
     ResultBuckets,
     ReviewResultRequest,
     ReviewResultResponse,
@@ -29,6 +33,7 @@ from app.schemas import (
     TaskSummaryResponse,
 )
 from app.services.audit import write_audit
+from app.services.agent.evidence_ledger import build_evidence_ledger, normalize_ledger_evidence_item
 from app.services.exports import build_csv, build_json, build_xlsx
 from app.services.streaming import TERMINAL_EVENTS, append_stream_event, encode_sse, keepalive_sse, parse_last_event_id, snapshot_event
 
@@ -190,6 +195,23 @@ def get_results(task_id: UUID, auth: AuthContext = Depends(get_auth), session: S
         item = document_result_item(result)
         getattr(buckets, result.decision).append(item)
     return TaskResultsResponse(task_id=task.id, buckets=buckets)
+
+
+@router.get("/{task_id}/condition-verdicts", response_model=ConditionVerdictResponse)
+def get_condition_verdicts(task_id: UUID, auth: AuthContext = Depends(get_auth), session: Session = Depends(get_session)):
+    task = load_owned_task(session, task_id, auth)
+    verdicts = session.scalars(
+        select(ConditionVerdict)
+        .where(ConditionVerdict.task_id == task.id)
+        .order_by(ConditionVerdict.document_uri.asc(), ConditionVerdict.condition_id.asc())
+    ).all()
+    return ConditionVerdictResponse(task_id=task.id, items=[condition_verdict_item(verdict) for verdict in verdicts])
+
+
+@router.get("/{task_id}/evidence-ledger", response_model=EvidenceLedgerResponse)
+def get_evidence_ledger(task_id: UUID, auth: AuthContext = Depends(get_auth), session: Session = Depends(get_session)):
+    task = load_owned_task(session, task_id, auth)
+    return EvidenceLedgerResponse(task_id=task.id, items=[LedgerEvidenceItem(**item) for item in build_evidence_ledger(session, task.id)])
 
 
 @router.patch("/{task_id}/results/{result_id}/review", response_model=ReviewResultResponse)
@@ -357,3 +379,39 @@ def task_counts_for_results(results: list[ScreeningDocumentResult]) -> tuple[Tas
         unreviewed=sum(1 for r in results if r.review_status == ReviewStatus.unreviewed.value),
     )
     return counts, review_counts
+
+
+def condition_verdict_item(verdict: ConditionVerdict) -> ConditionVerdictItem:
+    supporting_evidence = [
+        LedgerEvidenceItem(
+            **normalize_ledger_evidence_item(
+                item,
+                document_uri=verdict.document_uri,
+            )
+        )
+        for item in verdict.supporting_evidence
+        if isinstance(item, dict)
+    ]
+    contradicting_evidence = [
+        LedgerEvidenceItem(
+            **normalize_ledger_evidence_item(
+                item,
+                document_uri=verdict.document_uri,
+            )
+        )
+        for item in verdict.contradicting_evidence
+        if isinstance(item, dict)
+    ]
+    return ConditionVerdictItem(
+        verdict_id=verdict.id,
+        task_id=verdict.task_id,
+        document_uri=verdict.document_uri,
+        condition_id=verdict.condition_id,
+        verdict=ConditionVerdictValue(verdict.verdict),
+        confidence=verdict.confidence,
+        supporting_evidence=supporting_evidence,
+        contradicting_evidence=contradicting_evidence,
+        missing_reason=verdict.missing_reason,
+        verification_method=verdict.verification_method,
+        created_at=verdict.created_at,
+    )
