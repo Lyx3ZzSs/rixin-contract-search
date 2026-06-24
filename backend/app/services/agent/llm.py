@@ -46,6 +46,9 @@ class AgentLlm(Protocol):
     def classify_document(self, plan: ScreeningPlanPayload, document: dict[str, Any]) -> dict[str, Any]:
         raise NotImplementedError
 
+    def judge_condition(self, plan: ScreeningPlanPayload, condition: Any, document: dict[str, Any], evidence: list[dict[str, Any]]) -> dict[str, Any]:
+        raise NotImplementedError
+
 
 class AgentLlmConfigurationError(RuntimeError):
     def __init__(self, message: str):
@@ -125,6 +128,30 @@ class OpenAICompatibleAgentLlm:
                     "missing_conditions": ["condition_id"],
                     "evidence": [{"page": 1, "text": "证据原文", "source": "qmd", "score": 0.9, "condition_id": "condition_id", "artifact_ref": "qmd://..."}],
                     "confidence": 0.0,
+                },
+            },
+        )
+        return data
+
+    def judge_condition(self, plan: ScreeningPlanPayload, condition: Any, document: dict[str, Any], evidence: list[dict[str, Any]]) -> dict[str, Any]:
+        data = self._json(
+            (
+                "你是合同条件核验器。只能基于输入evidence判断condition是否被证据支持，"
+                "不得使用外部知识或猜测。证据不足必须输出unknown，证据相互冲突必须输出conflicting。"
+                "只输出JSON，不要输出解释、Markdown或代码块。"
+            ),
+            {
+                "task": "逐条件核验该文档是否满足筛选条件。",
+                "plan": plan.model_dump(),
+                "condition": condition.model_dump() if hasattr(condition, "model_dump") else condition,
+                "document": document,
+                "evidence": evidence,
+                "schema": {
+                    "verdict": "satisfied|not_satisfied|unknown|conflicting",
+                    "confidence": 0.0,
+                    "supporting_evidence": evidence,
+                    "contradicting_evidence": [],
+                    "missing_reason": "证据不足时填写原因，否则为null",
                 },
             },
         )

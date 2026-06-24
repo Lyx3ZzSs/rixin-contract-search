@@ -9,6 +9,7 @@ from app.models import ScreeningDocumentResult, ScreeningPlan, ScreeningTask
 from app.schemas import EvidenceItem, ScreeningPlanPayload
 from app.services.agent.aggregator import aggregate_document_candidates
 from app.services.agent.llm import AgentLlm
+from app.services.agent.verifier import verify_documents
 from app.services.audit import write_audit
 from app.services.retrieval.qmd_client import ensure_collections_available, persist_qmd_results
 from app.services.streaming import publish_stream_event
@@ -75,12 +76,14 @@ class ContractScreeningAgent:
         graph.add_node("retrieve", self._retrieve)
         graph.add_node("refine_queries", self._refine_queries)
         graph.add_node("classify", self._classify)
+        graph.add_node("verify", self._verify)
         graph.add_edge(START, "plan")
         graph.add_edge("plan", "check_collections")
         graph.add_edge("check_collections", "retrieve")
-        graph.add_conditional_edges("retrieve", self._route_after_retrieve, {True: "refine_queries", False: "classify"})
+        graph.add_conditional_edges("retrieve", self._route_after_retrieve, {"refine_queries": "refine_queries", "verify": "verify", "classify": "classify"})
         graph.add_edge("refine_queries", "retrieve")
         graph.add_edge("classify", END)
+        graph.add_edge("verify", END)
         return graph.compile()
 
     def _plan(self, state: AgentState) -> AgentState:
@@ -164,8 +167,12 @@ class ContractScreeningAgent:
             "executed_queries": sorted(executed),
         }
 
-    def _route_after_retrieve(self, state: AgentState) -> bool:
-        return bool(state.get("should_refine"))
+    def _route_after_retrieve(self, state: AgentState) -> str:
+        if state.get("should_refine"):
+            return "refine_queries"
+        if _uses_phase3_verification(state["plan"]):
+            return "verify"
+        return "classify"
 
     def _refine_queries(self, state: AgentState) -> AgentState:
         session = state["session"]
@@ -250,6 +257,35 @@ class ContractScreeningAgent:
             )
         return {**state, "document_count": len(documents)}
 
+    def _verify(self, state: AgentState) -> AgentState:
+        session = state["session"]
+        task = state["task"]
+        plan = state["plan"]
+        task.status = TaskStatus.classifying.value
+        task.current_stage = TaskStatus.classifying.value
+        task.progress_percent = 75
+        publish_stream_event(
+            session,
+            task,
+            "verification_started",
+            {},
+            status=TaskStatus.classifying.value,
+            current_stage=TaskStatus.classifying.value,
+            progress_percent=75,
+        )
+        document_count = verify_documents(session, task, plan, self.qmd, self.llm)
+        task.progress_percent = 95
+        publish_stream_event(
+            session,
+            task,
+            "verification_completed",
+            {"document_count": document_count},
+            status=TaskStatus.classifying.value,
+            current_stage=TaskStatus.classifying.value,
+            progress_percent=95,
+        )
+        return {**state, "document_count": document_count}
+
     def _missing_condition_ids(self, session: Session, task: ScreeningTask, plan: ScreeningPlanPayload) -> list[str]:
         documents = aggregate_document_candidates(session, task.id, plan)
         condition_ids = {condition.id for condition in plan.conditions}
@@ -303,3 +339,7 @@ def _serialize_document(document: dict[str, Any]) -> dict[str, Any]:
         "collection": document["collection"],
         "conditions": conditions,
     }
+
+
+def _uses_phase3_verification(plan: ScreeningPlanPayload) -> bool:
+    return plan.plan_version >= 2 or plan.decision_policy == "all_required_conditions_satisfied_else_uncertain_on_missing_or_conflict"
