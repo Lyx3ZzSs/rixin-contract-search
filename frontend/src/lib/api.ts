@@ -1,7 +1,11 @@
 import type {
+  ConditionVerdictResponse,
   CreateTaskRequest,
   CreateTaskResponse,
   ExportFormat,
+  EvidenceLedgerResponse,
+  QmdDocumentPreview,
+  QmdEvidenceContext,
   QmdStatus,
   ReviewResultRequest,
   ReviewResultResponse,
@@ -89,6 +93,16 @@ export async function getTaskResults(taskId: string): Promise<TaskResults> {
   return readJson<TaskResults>(response);
 }
 
+export async function getConditionVerdicts(taskId: string): Promise<ConditionVerdictResponse> {
+  const response = await fetch(`${apiBase}/api/screening-tasks/${pathSegment(taskId)}/condition-verdicts`);
+  return readJson<ConditionVerdictResponse>(response);
+}
+
+export async function getEvidenceLedger(taskId: string): Promise<EvidenceLedgerResponse> {
+  const response = await fetch(`${apiBase}/api/screening-tasks/${pathSegment(taskId)}/evidence-ledger`);
+  return readJson<EvidenceLedgerResponse>(response);
+}
+
 export async function reviewDocumentResult(taskId: string, resultId: string, payload: ReviewResultRequest): Promise<ReviewResultResponse> {
   const response = await fetch(`${apiBase}/api/screening-tasks/${pathSegment(taskId)}/results/${pathSegment(resultId)}/review`, {
     method: 'PATCH',
@@ -105,6 +119,41 @@ export function exportTaskUrl(taskId: string, format: ExportFormat): string {
 export async function getQmdStatus(): Promise<QmdStatus> {
   const response = await fetch(`${apiBase}/api/qmd/status`);
   return readJson<QmdStatus>(response);
+}
+
+export async function getQmdPreview(taskId: string, documentUri: string): Promise<QmdDocumentPreview> {
+  const search = new URLSearchParams();
+  search.set('task_id', taskId);
+  search.set('document_uri', documentUri);
+  const response = await fetch(`${apiBase}/api/qmd-documents/preview?${search.toString()}`);
+  return readJson<QmdDocumentPreview>(response);
+}
+
+export async function getQmdEvidenceContext(
+  taskId: string,
+  params: { document_uri: string; condition_id?: string; page?: number | null }
+): Promise<QmdEvidenceContext> {
+  const search = new URLSearchParams();
+  search.set('task_id', taskId);
+  search.set('document_uri', params.document_uri);
+  if (params.condition_id) search.set('condition_id', params.condition_id);
+  if (params.page !== undefined && params.page !== null) search.set('page', String(params.page));
+  const response = await fetch(`${apiBase}/api/qmd-documents/evidence-context?${search.toString()}`);
+  return readJson<QmdEvidenceContext>(response);
+}
+
+export function getQmdOpenLinkUrl(taskId: string, documentUri: string): string {
+  const search = new URLSearchParams();
+  search.set('task_id', taskId);
+  search.set('document_uri', documentUri);
+  return `${apiBase}/api/qmd-documents/open-link?${search.toString()}`;
+}
+
+export function getQmdDownloadUrl(taskId: string, documentUri: string): string {
+  const search = new URLSearchParams();
+  search.set('task_id', taskId);
+  search.set('document_uri', documentUri);
+  return `${apiBase}/api/qmd-documents/download?${search.toString()}`;
 }
 
 export async function getRuntimeStatus(): Promise<RuntimeStatus> {

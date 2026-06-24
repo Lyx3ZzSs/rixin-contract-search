@@ -75,6 +75,10 @@ const results = {
         review_note: null,
         reviewer_name: null,
         reviewed_at: null,
+        decision_basis: { general_match: 'satisfied' },
+        uncertain_reasons: [],
+        evidence_support_rate: 1,
+        verification_status: 'deep_read_verified',
         created_at: '2026-06-22T00:00:01Z',
         updated_at: '2026-06-22T00:00:01Z'
       }
@@ -150,7 +154,9 @@ describe('TaskProgressPage', () => {
       </MemoryRouter>
     );
 
-    await waitFor(() => expect(screen.getByText('采购合同')).toBeInTheDocument());
+    expect(await screen.findByRole('heading', { name: '采购合同', level: 3 })).toBeInTheDocument();
+    expect(await screen.findByText('条件矩阵')).toBeInTheDocument();
+    expect(screen.getByText('证据账本')).toBeInTheDocument();
     expect(screen.getByText('company_docs · contracts/purchase.md')).toBeInTheDocument();
     expect(screen.getByTestId('event-progress')).toBeInTheDocument();
     expect(screen.getByText('理解筛选条件')).toBeInTheDocument();
@@ -183,6 +189,10 @@ describe('TaskProgressPage', () => {
       .mockResolvedValueOnce(streamResponse([]))
       .mockResolvedValueOnce(jsonResponse(completedSummary))
       .mockResolvedValueOnce(jsonResponse(results))
+      .mockResolvedValueOnce(jsonResponse({ task_id: 'task-1', items: [] }))
+      .mockResolvedValueOnce(jsonResponse({ task_id: 'task-1', items: [] }))
+      .mockResolvedValueOnce(jsonResponse({ document_uri: 'qmd://company_docs/contracts/purchase.md', toc: [], can_open: false, can_download: false }))
+      .mockResolvedValueOnce(jsonResponse({ document_uri: 'qmd://company_docs/contracts/purchase.md', text: '合同总价为人民币120万元', source_tool: 'doc_read' }))
       .mockResolvedValueOnce(jsonResponse({ result: reviewedResult }));
     vi.stubGlobal('fetch', fetchMock);
 
@@ -194,7 +204,7 @@ describe('TaskProgressPage', () => {
       </MemoryRouter>
     );
 
-    await waitFor(() => expect(screen.getByText('采购合同')).toBeInTheDocument());
+    expect(await screen.findByRole('heading', { name: '采购合同', level: 3 })).toBeInTheDocument();
 
     await user.clear(screen.getByLabelText('复核人'));
     await user.type(screen.getByLabelText('复核人'), '  王五  ');
@@ -243,7 +253,7 @@ describe('TaskProgressPage', () => {
       </MemoryRouter>
     );
 
-    await waitFor(() => expect(screen.getByText('采购合同')).toBeInTheDocument());
+    expect(await screen.findByRole('heading', { name: '采购合同', level: 3 })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: '导出 CSV' })).toHaveAttribute('href', '/api/screening-tasks/task-1/export.csv');
     expect(screen.getByRole('button', { name: '保存复核' })).toBeInTheDocument();
 

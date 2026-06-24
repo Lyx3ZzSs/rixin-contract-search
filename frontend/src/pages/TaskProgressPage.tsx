@@ -1,11 +1,35 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { exportTaskUrl, getTaskResults, getTaskSummary, reviewDocumentResult } from '../lib/api';
-import { failureMessage } from '../lib/errorMessages';
+import {
+  exportTaskUrl,
+  getConditionVerdicts,
+  getEvidenceLedger,
+  getQmdEvidenceContext,
+  getQmdDownloadUrl,
+  getQmdPreview,
+  getQmdOpenLinkUrl,
+  getTaskResults,
+  getTaskSummary,
+  reviewDocumentResult
+} from '../lib/api';
+import { apiErrorMessage, failureMessage } from '../lib/errorMessages';
 import { getReviewerName, setReviewerName } from '../lib/reviewer';
 import { subscribeTaskEvents } from '../lib/sse';
 import { buildTaskActivity } from '../lib/taskActivity';
-import type { DocumentResultItem, ResultDecision, ReviewStatus, StreamEvent, TaskResults, TaskSummary } from '../lib/types';
+import type {
+  ConditionVerdictItem,
+  ConditionVerdictValue,
+  DocumentResultItem,
+  EvidenceLedgerResponse,
+  LedgerEvidenceItem,
+  QmdDocumentPreview,
+  QmdEvidenceContext,
+  ResultDecision,
+  ReviewStatus,
+  StreamEvent,
+  TaskResults,
+  TaskSummary
+} from '../lib/types';
 
 const decisionLabels = {
   included: '入选',
@@ -22,12 +46,26 @@ const decisionClasses = {
 type DecisionFilter = 'all' | ResultDecision;
 type ReviewFilter = 'all' | ReviewStatus;
 
+type PreviewTarget = {
+  documentUri: string;
+  conditionId: string | null;
+  page: number | null;
+};
+
 export function TaskProgressPage() {
   const { taskId } = useParams();
   const [summary, setSummary] = useState<TaskSummary | null>(null);
   const [results, setResults] = useState<TaskResults | null>(null);
+  const [verdicts, setVerdicts] = useState<ConditionVerdictItem[]>([]);
+  const [ledger, setLedger] = useState<LedgerEvidenceItem[]>([]);
   const [events, setEvents] = useState<StreamEvent[]>([]);
   const [selectedUri, setSelectedUri] = useState<string | null>(null);
+  const [previewTarget, setPreviewTarget] = useState<PreviewTarget | null>(null);
+  const [previewMeta, setPreviewMeta] = useState<QmdDocumentPreview | null>(null);
+  const [previewContext, setPreviewContext] = useState<QmdEvidenceContext | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [phase3Loading, setPhase3Loading] = useState(false);
   const [decisionFilter, setDecisionFilter] = useState<DecisionFilter>('all');
   const [reviewFilter, setReviewFilter] = useState<ReviewFilter>('all');
   const [keywordFilter, setKeywordFilter] = useState('');
@@ -39,8 +77,16 @@ export function TaskProgressPage() {
     let cancelled = false;
     setSummary(null);
     setResults(null);
+    setVerdicts([]);
+    setLedger([]);
     setEvents([]);
     setSelectedUri(null);
+    setPreviewTarget(null);
+    setPreviewMeta(null);
+    setPreviewContext(null);
+    setPreviewError(null);
+    setPreviewLoading(false);
+    setPhase3Loading(false);
     setDecisionFilter('all');
     setReviewFilter('all');
     setKeywordFilter('');
@@ -82,12 +128,24 @@ export function TaskProgressPage() {
   }, [taskId]);
 
   async function loadFinal(id: string, isCancelled: () => boolean) {
-    const [nextSummary, nextResults] = await Promise.all([getTaskSummary(id), getTaskResults(id)]);
-    if (isCancelled()) return;
-    setSummary(nextSummary);
-    setResults(nextResults);
-    const first = flattenResults(nextResults)[0];
-    setSelectedUri((current) => current || first?.document_uri || null);
+    setPhase3Loading(true);
+    try {
+      const [nextSummary, nextResults, nextVerdicts, nextLedger] = await Promise.all([
+        getTaskSummary(id),
+        getTaskResults(id),
+        getConditionVerdicts(id).catch((): { task_id: string; items: ConditionVerdictItem[] } => ({ task_id: id, items: [] })),
+        getEvidenceLedger(id).catch((): EvidenceLedgerResponse => ({ task_id: id, items: [] }))
+      ]);
+      if (isCancelled()) return;
+      setSummary(nextSummary);
+      setResults(nextResults);
+      setVerdicts(nextVerdicts.items);
+      setLedger(nextLedger.items);
+      const first = flattenResults(nextResults)[0];
+      setSelectedUri((current) => current || first?.document_uri || null);
+    } finally {
+      if (!isCancelled()) setPhase3Loading(false);
+    }
   }
 
   function handleReviewed(result: DocumentResultItem) {
@@ -105,8 +163,84 @@ export function TaskProgressPage() {
     [documents, decisionFilter, keywordFilter, reviewFilter]
   );
   const selectedDocument = filteredDocuments.find((item) => item.document_uri === selectedUri) || filteredDocuments[0] || null;
+  const visibleLedger = useMemo(() => {
+    if (!ledger.length) return [];
+    if (!selectedDocument) return ledger;
+    return ledger.filter((item) => item.document_uri === selectedDocument.document_uri);
+  }, [ledger, selectedDocument]);
+  const selectedDocumentUri = selectedDocument?.document_uri || null;
   const isCompleted = visibleSummary?.status === 'completed';
   const taskFailureMessage = error || (visibleSummary?.status === 'failed' ? failureMessage(visibleSummary.error_code, visibleSummary.error_message) : null);
+
+  useEffect(() => {
+    if (!selectedDocumentUri) {
+      setPreviewTarget(null);
+      setPreviewMeta(null);
+      setPreviewContext(null);
+      setPreviewError(null);
+      setPreviewLoading(false);
+      return;
+    }
+    setPreviewTarget((current) => {
+      if (current && current.documentUri === selectedDocumentUri) return current;
+      return {
+        documentUri: selectedDocumentUri,
+        conditionId: selectedDocument?.matched_conditions[0] || selectedDocument?.missing_conditions[0] || null,
+        page: selectedDocument?.evidence.find((item) => item.page !== null)?.page ?? null
+      };
+    });
+  }, [selectedDocument, selectedDocumentUri]);
+
+  useEffect(() => {
+    if (!taskId || !previewTarget) return;
+    const currentTaskId = taskId;
+    const target = previewTarget;
+    if (!target.documentUri.trim()) {
+      setPreviewError('原文预览需要有效的 document_uri 或 artifact_ref。');
+      setPreviewMeta(null);
+      setPreviewContext(null);
+      return;
+    }
+
+    let cancelled = false;
+    setPreviewLoading(true);
+    setPreviewError(null);
+
+    async function loadPreview() {
+      const [metaResult, contextResult] = await Promise.allSettled([
+        getQmdPreview(currentTaskId, target.documentUri),
+        getQmdEvidenceContext(currentTaskId, {
+          document_uri: target.documentUri,
+          condition_id: target.conditionId || undefined,
+          page: target.page
+        })
+      ]);
+
+      if (cancelled) return;
+
+      if (metaResult.status === 'fulfilled') {
+        setPreviewMeta(metaResult.value);
+      } else {
+        setPreviewMeta(null);
+        setPreviewError(apiErrorMessage(metaResult.reason, '原文预览加载失败'));
+      }
+
+      if (contextResult.status === 'fulfilled') {
+        setPreviewContext(contextResult.value);
+      } else {
+        setPreviewContext(null);
+        setPreviewError((current) => current || apiErrorMessage(contextResult.reason, '原文上下文加载失败'));
+      }
+
+      setPreviewLoading(false);
+    }
+
+    void loadPreview();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [previewTarget, taskId]);
 
   if (!taskId) {
     return <div className="agent-shell">缺少任务 ID</div>;
@@ -178,6 +312,35 @@ export function TaskProgressPage() {
 
         <section className="panel-center">
           <ResultSummary summary={visibleSummary} results={visibleResults} />
+          <ConditionMatrixPanel
+            document={selectedDocument}
+            verdicts={verdicts}
+            onPick={(target) => {
+              setSelectedUri(target.documentUri);
+              setPreviewTarget(target);
+            }}
+          />
+          <EvidenceLedgerPanel
+            document={selectedDocument}
+            items={visibleLedger}
+            loading={phase3Loading}
+            onPick={(target) => {
+              setSelectedUri(target.documentUri);
+              setPreviewTarget(target);
+            }}
+          />
+          <QmdContextPanel
+            document={selectedDocument}
+            loading={previewLoading}
+            preview={previewMeta}
+            context={previewContext}
+            error={previewError}
+            onPreview={(target) => {
+              setSelectedUri(target.documentUri);
+              setPreviewTarget(target);
+            }}
+            taskId={taskId}
+          />
           <section className="results-card">
             <div className="section-title-row">
               <h2>文件结果</h2>
@@ -263,7 +426,18 @@ function ResultSummary({ summary, results }: { summary: TaskSummary | null; resu
 function DocumentCard({ document, selected, onSelect }: { document: DocumentResultItem; selected: boolean; onSelect: () => void }) {
   const title = document.document_title || document.document_path;
   return (
-    <article className={`contract-card ${selected ? 'is-selected' : ''}`} onClick={onSelect} role="button" tabIndex={0}>
+    <article
+      className={`contract-card ${selected ? 'is-selected' : ''}`}
+      onClick={onSelect}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onSelect();
+        }
+      }}
+      role="button"
+      tabIndex={0}
+    >
       <div className="contract-card-top">
         <div className="file-title-block">
           <span className="contract-id">{document.collection}</span>
@@ -296,6 +470,260 @@ function DocumentCard({ document, selected, onSelect }: { document: DocumentResu
         </span>
       </div>
     </article>
+  );
+}
+
+function ConditionMatrixPanel({
+  document,
+  verdicts,
+  onPick
+}: {
+  document: DocumentResultItem | null;
+  verdicts: ConditionVerdictItem[];
+  onPick: (target: PreviewTarget) => void;
+}) {
+  const matrix = buildVerdictMatrix(verdicts);
+  const columns = matrix.columns;
+  const rows = document ? matrix.rows.filter((row) => row.documentUri === document.document_uri) : matrix.rows;
+  const gridTemplateColumns = [`minmax(220px, 1.2fr)`, ...columns.map(() => 'minmax(96px, 1fr)')].join(' ');
+
+  return (
+    <section className="phase3-panel">
+      <div className="section-title-row">
+        <div>
+          <h2>条件矩阵</h2>
+          <span>{document ? `当前文档：${document.document_title || document.document_path}` : '按任务汇总所有文档的条件判定'}</span>
+        </div>
+        <span>{rows.length} 行</span>
+      </div>
+      {columns.length === 0 || rows.length === 0 ? (
+        <div className="empty-state compact">
+          <strong>暂无条件矩阵</strong>
+          <span>任务完成后会显示文档与条件的逐项判定。</span>
+        </div>
+      ) : (
+        <div className="matrix-table" role="table" aria-label="条件矩阵">
+          <div className="matrix-row matrix-head" role="row" style={{ gridTemplateColumns }}>
+            <span role="columnheader">
+              文档
+            </span>
+            {columns.map((conditionId) => (
+              <span role="columnheader" key={conditionId}>
+                {conditionId}
+              </span>
+            ))}
+          </div>
+          {rows.map((row) => (
+            <div className="matrix-row" key={row.documentUri} role="row" style={{ gridTemplateColumns }}>
+              <button
+                className="matrix-document-button"
+                type="button"
+                onClick={() =>
+                  onPick({
+                    documentUri: row.documentUri,
+                    conditionId: row.items.values().next().value?.condition_id || null,
+                    page: null
+                  })
+                }
+              >
+                {row.documentTitle || row.documentPath}
+              </button>
+              {columns.map((conditionId) => {
+                const item = row.items.get(conditionId);
+                return (
+                  <button
+                    className={`verdict-pill verdict-${item?.verdict || 'missing'}`}
+                    key={`${row.documentUri}-${conditionId}`}
+                    type="button"
+                    onClick={() => {
+                      if (!item) return;
+                      const supportingPage = item.supporting_evidence.find((evidence) => evidence.page !== null)?.page ?? null;
+                      onPick({
+                        documentUri: row.documentUri,
+                        conditionId,
+                        page: supportingPage
+                      });
+                    }}
+                    disabled={!item}
+                  >
+                    {item ? verdictLabel(item.verdict) : '—'}
+                  </button>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function EvidenceLedgerPanel({
+  document,
+  items,
+  loading,
+  onPick
+}: {
+  document: DocumentResultItem | null;
+  items: LedgerEvidenceItem[];
+  loading: boolean;
+  onPick: (target: PreviewTarget) => void;
+}) {
+  return (
+    <section className="phase3-panel">
+      <div className="section-title-row">
+        <div>
+          <h2>证据账本</h2>
+          <span>{document ? `已过滤到：${document.document_title || document.document_path}` : '显示任务下全部证据记录'}</span>
+        </div>
+        <span>{items.length} 条</span>
+      </div>
+      {loading ? (
+        <div className="empty-state compact">
+          <strong>正在加载证据账本</strong>
+        </div>
+      ) : items.length === 0 ? (
+        <div className="empty-state compact">
+          <strong>暂无证据账本</strong>
+          <span>后端返回的证据条目会按文档和条件聚合在这里。</span>
+        </div>
+      ) : (
+        <div className="ledger-list">
+          {items.map((item, index) => (
+            <button
+              className="ledger-row"
+              key={`${item.condition_id}-${item.page ?? 'na'}-${index}`}
+              type="button"
+              onClick={() => {
+                const resolvedUri = resolveEvidenceDocumentUri(item, document);
+                if (!resolvedUri) return;
+                onPick({
+                  documentUri: resolvedUri,
+                  conditionId: item.condition_id,
+                  page: item.page
+                });
+              }}
+            >
+              <div>
+                <strong>{item.condition_id}</strong>
+                <span>{item.document_path || item.document_uri || '未命中文档'}</span>
+              </div>
+              <div>
+                <strong>{ledgerRoleLabel(item.role)}</strong>
+                <span>{ledgerToolLabel(item.source_tool)}</span>
+              </div>
+              <div>
+                <strong>{item.page !== null ? `第 ${item.page} 页` : '页码未知'}</strong>
+                <span>{item.used_for_decision ? '参与判定' : '仅检索'}</span>
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function QmdContextPanel({
+  document,
+  loading,
+  preview,
+  context,
+  error,
+  onPreview,
+  taskId
+}: {
+  document: DocumentResultItem | null;
+  loading: boolean;
+  preview: QmdDocumentPreview | null;
+  context: QmdEvidenceContext | null;
+  error: string | null;
+  onPreview: (target: PreviewTarget) => void;
+  taskId: string;
+}) {
+  const documentUri = document?.document_uri || null;
+  const canOpen = Boolean(preview?.can_open && documentUri);
+  const canDownload = Boolean(preview?.can_download && documentUri);
+  const conditionLabel = context?.condition_id ? `条件：${context.condition_id}` : '条件：-';
+  const pageLabel = context && context.page != null ? `页码：${context.page}` : '页码：-';
+  const anchorLabel = context?.anchor || '锚点：-';
+
+  return (
+    <section className="phase3-panel">
+      <div className="section-title-row">
+        <div>
+          <h2>原文上下文</h2>
+          <span>{document ? document.document_title || document.document_path : '点击条件矩阵或证据账本可切换上下文'}</span>
+        </div>
+        <span>{loading ? '加载中' : context?.source_tool || '待选中'}</span>
+      </div>
+      {!document ? (
+        <div className="empty-state compact">
+          <strong>请选择一份合同</strong>
+          <span>会自动加载该文档的原文预览和上下文。</span>
+        </div>
+      ) : (
+        <div className="context-box">
+          {error ? (
+            <div className="context-error">
+              <strong>{error}</strong>
+              <span>确认该文档与任务关联后重试。</span>
+            </div>
+          ) : null}
+          <div className="context-toolbar">
+            <div>
+              <strong>{preview?.document_title || document.document_title || document.document_path}</strong>
+              <span>{preview?.summary || document.collection || document.document_uri}</span>
+            </div>
+            <div className="context-actions">
+              <button
+                className="ghost-button"
+                type="button"
+                onClick={() =>
+                  onPreview({
+                    documentUri: documentUri || '',
+                    conditionId: null,
+                    page: null
+                  })
+                }
+                disabled={!documentUri}
+              >
+                重新加载
+              </button>
+              {canOpen ? (
+                <a className="mini-button" href={getQmdOpenLinkUrl(taskId, documentUri || '')}>
+                  打开原文
+                </a>
+              ) : null}
+              {canDownload ? (
+                <a className="mini-button" href={getQmdDownloadUrl(taskId, documentUri || '')}>
+                  下载原文
+                </a>
+              ) : null}
+            </div>
+          </div>
+          <div className="context-body">
+            <div className="context-text">{context?.text || '正在等待上下文内容'}</div>
+            <div className="context-meta">
+              <span>{conditionLabel}</span>
+              <span>{pageLabel}</span>
+              <span>{anchorLabel}</span>
+              <span>{preview?.collection || document.collection || 'collection：-'}</span>
+            </div>
+          </div>
+          {preview?.toc?.length ? (
+            <div className="context-toc">
+              <strong>目录</strong>
+              <ul>
+                {preview.toc.slice(0, 5).map((item, index) => (
+                  <li key={index}>{tocEntryLabel(item)}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -366,6 +794,24 @@ function EvidencePanel({ document, taskId, onReviewed }: { document: DocumentRes
           <p>
             判断：{decisionLabels[document.decision]} · {document.reason}
           </p>
+          <div className="summary-grid phase3-summary-grid">
+            <span>
+              <strong>核验状态</strong>
+              {document.verification_status}
+            </span>
+            <span>
+              <strong>证据支持率</strong>
+              {Math.round(document.evidence_support_rate * 100)}%
+            </span>
+            <span>
+              <strong>不确定原因</strong>
+              {document.uncertain_reasons.length ? document.uncertain_reasons.join('、') : '无'}
+            </span>
+            <span>
+              <strong>判定摘要</strong>
+              {Object.keys(document.decision_basis).length ? Object.keys(document.decision_basis).join('、') : '无'}
+            </span>
+          </div>
           {document.review_status === 'reviewed' ? (
             <div className="review-status-box">
               <strong>已复核：{document.reviewer_name || '未记录复核人'}</strong>
@@ -420,6 +866,95 @@ function EvidencePanel({ document, taskId, onReviewed }: { document: DocumentRes
       </div>
     </div>
   );
+}
+
+function buildVerdictMatrix(verdicts: ConditionVerdictItem[] = []): {
+  columns: string[];
+  rows: Array<{
+    documentUri: string;
+    documentTitle: string | null;
+    documentPath: string;
+    items: Map<string, ConditionVerdictItem>;
+  }>;
+} {
+  const columns = Array.from(new Set(verdicts.map((item) => item.condition_id))).sort((a, b) => a.localeCompare(b));
+  const grouped = new Map<
+    string,
+    {
+      documentUri: string;
+      documentTitle: string | null;
+      documentPath: string;
+      items: Map<string, ConditionVerdictItem>;
+    }
+  >();
+
+  for (const item of verdicts) {
+    if (!grouped.has(item.document_uri)) {
+      grouped.set(item.document_uri, {
+        documentUri: item.document_uri,
+        documentTitle: null,
+        documentPath: item.document_uri,
+        items: new Map()
+      });
+    }
+    const row = grouped.get(item.document_uri)!;
+    row.items.set(item.condition_id, item);
+  }
+
+  return {
+    columns,
+    rows: Array.from(grouped.values()).sort((left, right) => left.documentPath.localeCompare(right.documentPath))
+  };
+}
+
+function verdictLabel(value: ConditionVerdictValue): string {
+  switch (value) {
+    case 'satisfied':
+      return '满足';
+    case 'not_satisfied':
+      return '不满足';
+    case 'conflicting':
+      return '冲突';
+    default:
+      return '未知';
+  }
+}
+
+function ledgerRoleLabel(role: LedgerEvidenceItem['role']): string {
+  switch (role) {
+    case 'supporting':
+      return '支持';
+    case 'contradicting':
+      return '反驳';
+    case 'missing_context':
+      return '缺失上下文';
+    default:
+      return '候选';
+  }
+}
+
+function ledgerToolLabel(tool: LedgerEvidenceItem['source_tool']): string {
+  switch (tool) {
+    case 'doc_grep':
+      return 'doc_grep';
+    case 'doc_read':
+      return 'doc_read';
+    case 'doc_query':
+      return 'doc_query';
+    case 'doc_elements':
+      return 'doc_elements';
+    default:
+      return 'query';
+  }
+}
+
+function resolveEvidenceDocumentUri(item: LedgerEvidenceItem, selectedDocument: DocumentResultItem | null): string | null {
+  return item.document_uri || item.artifact_ref || selectedDocument?.document_uri || null;
+}
+
+function tocEntryLabel(entry: Record<string, unknown>): string {
+  const label = entry.title || entry.name || entry.label || entry.text;
+  return typeof label === 'string' && label.trim() ? label : JSON.stringify(entry);
 }
 
 function flattenResults(results: TaskResults): DocumentResultItem[] {

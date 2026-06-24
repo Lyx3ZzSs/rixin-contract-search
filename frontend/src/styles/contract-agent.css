@@ -549,6 +549,245 @@ h1 {
   padding: 16px;
 }
 
+.phase3-panel {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  padding: 16px;
+}
+
+.phase3-panel .section-title-row {
+  margin-bottom: 12px;
+}
+
+.phase3-panel .section-title-row > div {
+  display: grid;
+  gap: 4px;
+}
+
+.phase3-panel .section-title-row span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.empty-state.compact {
+  padding: 12px;
+  text-align: left;
+}
+
+.phase3-summary-grid {
+  margin: 12px 0 0;
+}
+
+.phase3-summary-grid span {
+  text-align: left;
+}
+
+.matrix-table {
+  display: grid;
+  gap: 8px;
+}
+
+.matrix-row {
+  display: grid;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.matrix-head {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.matrix-head span {
+  padding: 0 10px;
+}
+
+.matrix-document-button,
+.verdict-pill,
+.ledger-row {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel-soft);
+  color: var(--text);
+  padding: 9px 10px;
+  text-align: left;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.matrix-document-button {
+  font-weight: 800;
+}
+
+.matrix-document-button:hover,
+.ledger-row:hover {
+  border-color: #9eb9ee;
+  background: var(--blue-soft);
+}
+
+.verdict-pill {
+  justify-content: center;
+  text-align: center;
+  font-weight: 850;
+}
+
+.verdict-pill:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.verdict-satisfied {
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+.verdict-not_satisfied {
+  background: var(--red-soft);
+  color: var(--red);
+}
+
+.verdict-unknown {
+  background: var(--yellow-soft);
+  color: var(--yellow);
+}
+
+.verdict-conflicting {
+  background: var(--orange-soft);
+  color: var(--orange);
+}
+
+.verdict-missing {
+  background: #f1f5f9;
+  color: var(--muted);
+}
+
+.ledger-list {
+  display: grid;
+  gap: 8px;
+}
+
+.ledger-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(140px, 0.85fr) minmax(120px, 0.7fr);
+  gap: 12px;
+}
+
+.ledger-row > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.ledger-row strong,
+.ledger-row span {
+  min-width: 0;
+}
+
+.ledger-row strong {
+  font-size: 12px;
+}
+
+.ledger-row span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.context-box {
+  display: grid;
+  gap: 12px;
+}
+
+.context-error {
+  display: grid;
+  gap: 4px;
+  border: 1px solid #f3c8c1;
+  border-radius: 8px;
+  background: var(--red-soft);
+  color: var(--red);
+  padding: 10px 12px;
+  font-size: 12px;
+}
+
+.context-toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.context-toolbar > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.context-toolbar strong {
+  font-size: 14px;
+}
+
+.context-toolbar span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.context-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.context-body {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+  padding: 12px;
+}
+
+.context-text {
+  color: #334155;
+  font-size: 13px;
+  line-height: 1.75;
+  white-space: pre-wrap;
+}
+
+.context-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.context-toc {
+  display: grid;
+  gap: 8px;
+}
+
+.context-toc strong {
+  font-size: 13px;
+}
+
+.context-toc ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.context-toc li {
+  color: #334155;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .section-title-row {
   align-items: center;
   margin-bottom: 14px;
@@ -1453,6 +1692,9 @@ mark {
   .contract-card-top,
   .condition-columns,
   .evidence-actions-bar,
+  .context-toolbar,
+  .ledger-row,
+  .matrix-row,
   .history-toolbar,
   .result-filters,
   .task-history-row {
@@ -1461,6 +1703,10 @@ mark {
 
   .score-block {
     justify-items: start;
+  }
+
+  .context-actions {
+    justify-content: flex-start;
   }
 
   .task-history-actions {
@@ -1490,6 +1736,12 @@ mark {
   .task-history-actions {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .matrix-head,
+  .matrix-row,
+  .ledger-row {
+    grid-template-columns: 1fr;
   }
 
   .task-history-actions .ghost-button,
