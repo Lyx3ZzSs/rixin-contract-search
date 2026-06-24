@@ -24,7 +24,7 @@ class AgentEvalPrediction(BaseModel):
     document_uri: str
     decision: ResultDecision
     evidence_support_rate: float = Field(ge=0.0, le=1.0)
-    verification_status: VerificationStatus | None = None
+    verification_status: VerificationStatus
 
     @field_validator("document_uri")
     @classmethod
@@ -63,6 +63,7 @@ class AgentEvalRunRequest(BaseModel):
     cases: list[AgentEvalCase] = Field(min_length=1)
     schema_failures: int = Field(default=0, ge=0)
     verification_failures: int = Field(default=0, ge=0)
+    failures: list[dict] = Field(default_factory=list)
 
 
 class AgentEvalRunResponse(BaseModel):
@@ -92,7 +93,7 @@ def run_agent_evals(
     session.add_all(case_rows)
     session.flush()
 
-    run = AgentEvalRun(case_ids=[str(case.id) for case in case_rows], metrics=metrics, failures=[])
+    run = AgentEvalRun(case_ids=[str(case.id) for case in case_rows], metrics=metrics, failures=payload.failures)
     session.add(run)
     session.flush()
     write_audit(

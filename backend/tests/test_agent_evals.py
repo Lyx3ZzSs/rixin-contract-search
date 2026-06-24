@@ -123,6 +123,60 @@ def test_agent_eval_run_endpoint_persists_metrics_and_cases(client, db_session):
         app.dependency_overrides.pop(get_auth, None)
 
 
+def test_agent_eval_run_requires_verification_status_for_actual_predictions(client):
+    response = client.post(
+        "/api/agent-evals/run",
+        json={
+            "cases": [
+                {
+                    "name": "金额筛选",
+                    "raw_query": "金额大于100万",
+                    "expected": {"included": ["qmd://docs/a.md"], "excluded": [], "uncertain": []},
+                    "actual": [{"document_uri": "qmd://docs/a.md", "decision": "included", "evidence_support_rate": 1.0}],
+                }
+            ]
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_agent_eval_run_persists_failures_round_trip(client, db_session):
+    session, _ = db_session
+    failures = [
+        {"stage": "schema", "message": "missing field", "case_index": 0},
+        {"stage": "verification", "message": "status missing", "case_index": 0},
+    ]
+
+    response = client.post(
+        "/api/agent-evals/run",
+        json={
+            "cases": [
+                {
+                    "name": "金额筛选",
+                    "raw_query": "金额大于100万",
+                    "expected": {"included": ["qmd://docs/a.md"], "excluded": [], "uncertain": []},
+                    "actual": [{"document_uri": "qmd://docs/a.md", "decision": "included", "evidence_support_rate": 1.0, "verification_status": "deep_read_verified"}],
+                }
+            ],
+            "failures": failures,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["failures"] == failures
+
+    run = session.get(AgentEvalRun, body["run_id"])
+    assert run is not None
+    assert run.failures == failures
+
+    get_response = client.get(f"/api/agent-evals/{body['run_id']}")
+
+    assert get_response.status_code == 200
+    assert get_response.json()["failures"] == failures
+
+
 def test_agent_eval_run_endpoint_clamps_failure_counts(client):
     response = client.post(
         "/api/agent-evals/run",
