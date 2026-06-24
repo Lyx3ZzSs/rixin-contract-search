@@ -32,7 +32,7 @@ npm run build
 - [ ] 文档和补丁无空白错误：
 
 ```sh
-git diff --check
+git diff --check <base>..HEAD
 ```
 
 ## 手工烟测
@@ -120,6 +120,13 @@ curl -s http://127.0.0.1:8000/api/screening-tasks/<task_id>/results
 - [ ] 结果列表可按 Agent 判断、复核状态和关键词过滤，证据详情可读。
 - [ ] 对一条结果保存人工复核后，页面显示复核状态、人工判断、备注、复核人和复核时间；刷新后仍可读。
 - [ ] 浏览器 `localStorage` 保存复核人姓名；后端 `screening_document_results` 保存复核字段，并写入 `audit_events.event_type=result_reviewed`。
+
+可用数据库查询抽查复核留痕：
+
+```sh
+psql "$DATABASE_URL" -c "select review_status, review_decision, reviewer_name, reviewed_at from screening_document_results where task_id = '<task_id>' limit 5;"
+psql "$DATABASE_URL" -c "select event_type, payload from audit_events where event_type = 'result_reviewed' order by created_at desc limit 5;"
+```
 - [ ] 完成任务可下载 CSV、XLSX、JSON；导出内容包含任务信息、文档信息、Agent 判断、证据摘要和复核字段。
 - [ ] qmd 停止或集合缺失时，任务失败提示能指向 qmd 服务或集合配置问题。
 - [ ] LLM key/model 配置错误时，失败提示能指向 LLM 配置问题。
