@@ -68,6 +68,46 @@ class VerdictLlm:
         }
 
 
+class QueryOnlyQmd:
+    def status(self):
+        return {"collections": [{"name": "company_docs"}]}
+
+    def query(self, query_text: str, collections: list[str], limit: int):
+        return [
+            {
+                "docid": "doc-1",
+                "file": "qmd://company_docs/contracts/a.md",
+                "title": "A合同",
+                "score": 0.91,
+                "snippet": "合同总价为人民币120万元。",
+                "page_number": 3,
+            }
+        ]
+
+
+class QueryOnlyVerdictLlm(VerdictLlm):
+    def plan(self, raw_query: str):
+        return ScreeningPlanPayload(
+            target="qmd_document",
+            plan_version=2,
+            conditions=[
+                ScreeningCondition(
+                    id="amount",
+                    description="合同总价大于等于100万元",
+                    condition_type="amount",
+                    operator="gte",
+                    value=1000000,
+                    qmd_queries=["合同总价 人民币 金额"],
+                    verification_strategy="query_only",
+                    required_evidence_count=1,
+                    evidence_required=1,
+                    structured=True,
+                )
+            ],
+            decision_policy="all_required_conditions_satisfied_else_uncertain_on_missing_or_conflict",
+        )
+
+
 def test_agent_persists_condition_verdicts_and_verified_document_result(db_session):
     from app.services.agent.langgraph_agent import ContractScreeningAgent
 
@@ -94,4 +134,33 @@ def test_agent_persists_condition_verdicts_and_verified_document_result(db_sessi
     result = session.scalars(select(ScreeningDocumentResult).where(ScreeningDocumentResult.task_id == task.id)).one()
     assert result.decision == ResultDecision.included.value
     assert result.verification_status == VerificationStatus.deep_read_verified.value
+    assert result.evidence_support_rate == 1.0
+
+
+def test_agent_query_only_satisfied_condition_persists_query_only_status(db_session):
+    from app.services.agent.langgraph_agent import ContractScreeningAgent
+
+    session, _ = db_session
+    task = ScreeningTask(
+        id=uuid4(),
+        owner_id="internal-user",
+        title="金额筛选",
+        raw_query="筛选合同总价大于等于100万元的合同",
+        status=TaskStatus.retrieving.value,
+        current_stage=TaskStatus.retrieving.value,
+        progress_percent=10,
+        metrics={},
+    )
+    session.add(task)
+    session.commit()
+
+    ContractScreeningAgent(llm=QueryOnlyVerdictLlm(), qmd=QueryOnlyQmd(), collections=["company_docs"], top_k=5, max_retrieval_rounds=1).run(session, task)
+
+    verdict = session.scalars(select(ConditionVerdict).where(ConditionVerdict.task_id == task.id)).one()
+    assert verdict.verdict == ConditionVerdictValue.satisfied.value
+    assert verdict.supporting_evidence[0]["source_tool"] == "query"
+
+    result = session.scalars(select(ScreeningDocumentResult).where(ScreeningDocumentResult.task_id == task.id)).one()
+    assert result.decision == ResultDecision.included.value
+    assert result.verification_status == VerificationStatus.query_only.value
     assert result.evidence_support_rate == 1.0

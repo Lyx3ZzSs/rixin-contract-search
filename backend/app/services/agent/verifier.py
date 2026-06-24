@@ -143,6 +143,7 @@ def _build_document_result(task: ScreeningTask, document: dict[str, Any], plan: 
     decision, reason, uncertain_reasons = _document_decision(verdicts)
     evidence = [item for verdict in verdicts for item in verdict.supporting_evidence if item.get("used_for_decision")]
     confidence = round(sum(verdict.confidence for verdict in verdicts) / total, 4)
+    verification_status = _verification_status(verdicts, support_rate)
     return ScreeningDocumentResult(
         task_id=task.id,
         document_uri=str(document["document_uri"]),
@@ -158,8 +159,35 @@ def _build_document_result(task: ScreeningTask, document: dict[str, Any], plan: 
         decision_basis={"condition_verdicts": [_condition_basis_item(verdict) for verdict in verdicts]},
         uncertain_reasons=uncertain_reasons,
         evidence_support_rate=support_rate,
-        verification_status=VerificationStatus.deep_read_verified.value if support_rate == 1.0 else VerificationStatus.partially_verified.value,
+        verification_status=verification_status,
     )
+
+
+def _verification_status(verdicts: list[ConditionVerdict], support_rate: float) -> str:
+    if support_rate < 1.0:
+        return VerificationStatus.partially_verified.value
+
+    if not verdicts:
+        return VerificationStatus.query_only.value
+
+    evidence_items = [item for verdict in verdicts for item in verdict.supporting_evidence if item.get("used_for_decision")]
+    if not evidence_items:
+        return VerificationStatus.query_only.value
+
+    source_tools = {str(item.get("source_tool")) for item in evidence_items if item.get("source_tool")}
+    if source_tools and source_tools <= {EvidenceSourceTool.query.value}:
+        return VerificationStatus.query_only.value
+
+    deep_read_tools = {
+        EvidenceSourceTool.doc_read.value,
+        EvidenceSourceTool.doc_query.value,
+        EvidenceSourceTool.doc_grep.value,
+        EvidenceSourceTool.doc_elements.value,
+    }
+    if source_tools and source_tools <= deep_read_tools:
+        return VerificationStatus.deep_read_verified.value
+
+    return VerificationStatus.partially_verified.value
 
 
 def _document_decision(verdicts: list[ConditionVerdict]) -> tuple[str, str, list[str]]:
