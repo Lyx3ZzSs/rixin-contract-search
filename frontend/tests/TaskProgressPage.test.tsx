@@ -88,6 +88,81 @@ const results = {
   }
 };
 
+const legacyResults = {
+  task_id: 'task-1',
+  buckets: {
+    included: [
+      (() => {
+        const { decision_basis, uncertain_reasons, evidence_support_rate, ...rest } = results.buckets.included[0];
+        void decision_basis;
+        void uncertain_reasons;
+        void evidence_support_rate;
+        return rest;
+      })()
+    ],
+    uncertain: [],
+    excluded: []
+  }
+};
+
+const verdicts = {
+  task_id: 'task-1',
+  items: [
+    {
+      verdict_id: 'verdict-1',
+      task_id: 'task-1',
+      document_uri: 'qmd://company_docs/contracts/purchase.md',
+      condition_id: 'general_match',
+      verdict: 'satisfied',
+      confidence: 0.93,
+      supporting_evidence: [
+        {
+          page: 1,
+          text: '合同总价为人民币120万元',
+          source: 'qmd',
+          score: 0.88,
+          condition_id: 'general_match',
+          artifact_ref: 'qmd://company_docs/contracts/purchase.md',
+          role: 'supporting',
+          source_tool: 'doc_read',
+          document_uri: 'qmd://company_docs/contracts/purchase.md',
+          document_path: 'contracts/purchase.md',
+          collection: 'company_docs',
+          anchor: '总价',
+          context: '原文片段',
+          used_for_decision: true
+        }
+      ],
+      contradicting_evidence: [],
+      missing_reason: null,
+      verification_method: 'manual',
+      created_at: '2026-06-22T00:00:01Z'
+    }
+  ]
+};
+
+const evidenceLedger = {
+  task_id: 'task-1',
+  items: [
+    {
+      page: 1,
+      text: '合同总价为人民币120万元',
+      source: 'qmd',
+      score: 0.88,
+      condition_id: 'general_match',
+      artifact_ref: 'qmd://company_docs/contracts/purchase.md',
+      role: 'supporting',
+      source_tool: 'doc_read',
+      document_uri: 'qmd://company_docs/contracts/purchase.md',
+      document_path: 'contracts/purchase.md',
+      collection: 'company_docs',
+      anchor: '总价',
+      context: '原文片段',
+      used_for_decision: true
+    }
+  ]
+};
+
 const multiDocumentResults = {
   ...results,
   buckets: {
@@ -198,18 +273,27 @@ describe('TaskProgressPage', () => {
   });
 
   it('loads final results after the SSE stream completes', async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(jsonResponse(runningSummary))
-      .mockResolvedValueOnce(
-        streamResponse([
-          ': keepalive\n\n',
-          'id: task-1:1\nevent: progress\ndata: {"event_id":"task-1:1","type":"progress","task_id":"task-1","timestamp":"2026-06-22T00:00:00Z","payload":{"progress_percent":90}}\n\n',
-          'id: task-1:2\nevent: task_completed\ndata: {"event_id":"task-1:2","type":"task_completed","task_id":"task-1","timestamp":"2026-06-22T00:00:01Z","payload":{"included_count":1}}\n\n'
-        ])
-      )
-      .mockResolvedValueOnce(jsonResponse(completedSummary))
-      .mockResolvedValueOnce(jsonResponse(results));
+    let summaryCalls = 0;
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/screening-tasks/task-1') {
+        summaryCalls += 1;
+        return Promise.resolve(jsonResponse(summaryCalls === 1 ? runningSummary : completedSummary));
+      }
+      if (url === '/api/screening-tasks/task-1/events') {
+        return Promise.resolve(
+          streamResponse([
+            ': keepalive\n\n',
+            'id: task-1:1\nevent: progress\ndata: {"event_id":"task-1:1","type":"progress","task_id":"task-1","timestamp":"2026-06-22T00:00:00Z","payload":{"progress_percent":90}}\n\n',
+            'id: task-1:2\nevent: task_completed\ndata: {"event_id":"task-1:2","type":"task_completed","task_id":"task-1","timestamp":"2026-06-22T00:00:01Z","payload":{"included_count":1}}\n\n'
+          ])
+        );
+      }
+      if (url === '/api/screening-tasks/task-1/results') return Promise.resolve(jsonResponse(legacyResults));
+      if (url === '/api/screening-tasks/task-1/condition-verdicts') return Promise.resolve(jsonResponse(verdicts));
+      if (url === '/api/screening-tasks/task-1/evidence-ledger') return Promise.resolve(jsonResponse(evidenceLedger));
+      return Promise.reject(new Error(`Unexpected URL ${url}`));
+    });
     vi.stubGlobal('fetch', fetchMock);
 
     render(
@@ -225,17 +309,79 @@ describe('TaskProgressPage', () => {
     expect(screen.getByText('证据账本')).toBeInTheDocument();
     expect(screen.getByText('company_docs · contracts/purchase.md')).toBeInTheDocument();
     expect(screen.getByTestId('event-progress')).toBeInTheDocument();
-    expect(screen.getByText('理解筛选条件')).toBeInTheDocument();
     expect(screen.getByText('实时活动')).toBeInTheDocument();
     expect(screen.getByText('已分析 0 份文档')).toBeInTheDocument();
     expect(screen.getByText('入选 · keyword_evidence_matched')).toBeInTheDocument();
+    expect(screen.getByText('点击条件矩阵或证据账本查看原文上下文')).toBeInTheDocument();
+    expect(screen.queryByText('NaN%')).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: '任务历史' })).toHaveAttribute('href', '/tasks');
     expect(screen.getByRole('link', { name: '导出 CSV' })).toHaveAttribute('href', '/api/screening-tasks/task-1/export.csv');
     expect(screen.getByRole('link', { name: '导出 XLSX' })).toHaveAttribute('href', '/api/screening-tasks/task-1/export.xlsx');
     expect(screen.getByRole('link', { name: '导出 JSON' })).toHaveAttribute('href', '/api/screening-tasks/task-1/export.json');
     expect(screen.getByRole('button', { name: '保存复核' })).toBeInTheDocument();
+    const requestedUrls = fetchMock.mock.calls.map(([input]) => String(input));
+    expect(requestedUrls.some((url) => url.includes('/api/qmd-documents/preview'))).toBe(false);
+    expect(requestedUrls.some((url) => url.includes('/api/qmd-documents/evidence-context'))).toBe(false);
     expect(fetchMock).toHaveBeenCalledWith('/api/screening-tasks/task-1/events', {
       signal: expect.any(AbortSignal)
+    });
+  });
+
+  it('loads qmd context only after an explicit matrix click', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/screening-tasks/task-1') return Promise.resolve(jsonResponse(completedSummary));
+      if (url === '/api/screening-tasks/task-1/events') return Promise.resolve(streamResponse([]));
+      if (url === '/api/screening-tasks/task-1/results') return Promise.resolve(jsonResponse(results));
+      if (url === '/api/screening-tasks/task-1/condition-verdicts') return Promise.resolve(jsonResponse(verdicts));
+      if (url === '/api/screening-tasks/task-1/evidence-ledger') return Promise.resolve(jsonResponse(evidenceLedger));
+      if (url.startsWith('/api/qmd-documents/preview')) {
+        return Promise.resolve(
+          jsonResponse({
+            document_uri: 'qmd://company_docs/contracts/purchase.md',
+            document_title: '采购合同',
+            collection: 'company_docs',
+            toc: [],
+            summary: '原文预览摘要',
+            can_open: true,
+            can_download: true
+          })
+        );
+      }
+      if (url.startsWith('/api/qmd-documents/evidence-context')) {
+        return Promise.resolve(
+          jsonResponse({
+            document_uri: 'qmd://company_docs/contracts/purchase.md',
+            condition_id: 'general_match',
+            page: 1,
+            anchor: '总价',
+            text: '合同总价为人民币120万元',
+            source_tool: 'doc_read'
+          })
+        );
+      }
+      return Promise.reject(new Error(`Unexpected URL ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <MemoryRouter initialEntries={['/tasks/task-1']}>
+        <Routes>
+          <Route path="/tasks/:taskId" element={<TaskProgressPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    const matrix = await screen.findByRole('table', { name: '条件矩阵' });
+    expect(fetchMock.mock.calls.map(([input]) => String(input)).some((url) => url.includes('/api/qmd-documents/'))).toBe(false);
+
+    await user.click(within(matrix).getByRole('button', { name: '满足' }));
+
+    await waitFor(() => {
+      const requestedUrls = fetchMock.mock.calls.map(([input]) => String(input));
+      expect(requestedUrls.some((url) => url.includes('/api/qmd-documents/preview'))).toBe(true);
+      expect(requestedUrls.some((url) => url.includes('/api/qmd-documents/evidence-context'))).toBe(true);
     });
   });
 
@@ -281,10 +427,8 @@ describe('TaskProgressPage', () => {
       .mockResolvedValueOnce(streamResponse([]))
       .mockResolvedValueOnce(jsonResponse(completedSummary))
       .mockResolvedValueOnce(jsonResponse(results))
-      .mockResolvedValueOnce(jsonResponse({ task_id: 'task-1', items: [] }))
-      .mockResolvedValueOnce(jsonResponse({ task_id: 'task-1', items: [] }))
-      .mockResolvedValueOnce(jsonResponse({ document_uri: 'qmd://company_docs/contracts/purchase.md', toc: [], can_open: false, can_download: false }))
-      .mockResolvedValueOnce(jsonResponse({ document_uri: 'qmd://company_docs/contracts/purchase.md', text: '合同总价为人民币120万元', source_tool: 'doc_read' }))
+      .mockResolvedValueOnce(jsonResponse(verdicts))
+      .mockResolvedValueOnce(jsonResponse(evidenceLedger))
       .mockResolvedValueOnce(jsonResponse({ result: reviewedResult }));
     vi.stubGlobal('fetch', fetchMock);
 
@@ -331,6 +475,8 @@ describe('TaskProgressPage', () => {
       if (url === '/api/screening-tasks/task-1') return Promise.resolve(jsonResponse(completedSummary));
       if (url === '/api/screening-tasks/task-1/results') return Promise.resolve(jsonResponse(results));
       if (url === '/api/screening-tasks/task-1/events') return Promise.resolve(streamResponse([]));
+      if (url === '/api/screening-tasks/task-1/condition-verdicts') return Promise.resolve(jsonResponse(verdicts));
+      if (url === '/api/screening-tasks/task-1/evidence-ledger') return Promise.resolve(jsonResponse(evidenceLedger));
       if (url === '/api/screening-tasks/task-2') return taskTwoSummaryPromise;
       if (url === '/api/screening-tasks/task-2/events') return Promise.resolve(streamResponse([]));
       return Promise.reject(new Error(`Unexpected URL ${url}`));

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import type { CSSProperties } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   exportTaskUrl,
@@ -138,7 +139,7 @@ export function TaskProgressPage() {
       ]);
       if (isCancelled()) return;
       setSummary(nextSummary);
-      setResults(nextResults);
+      setResults(normalizeTaskResults(nextResults));
       setVerdicts(nextVerdicts.items);
       setLedger(nextLedger.items);
       const first = flattenResults(nextResults)[0];
@@ -149,8 +150,9 @@ export function TaskProgressPage() {
   }
 
   function handleReviewed(result: DocumentResultItem) {
-    setResults((current) => (current ? updateResultInBuckets(current, result) : current));
-    setSelectedUri(result.document_uri);
+    const normalizedResult = normalizeDocumentResultItem(result);
+    setResults((current) => (current ? updateResultInBuckets(current, normalizedResult) : current));
+    setSelectedUri(normalizedResult.document_uri);
   }
 
   const visibleSummary = summary?.task_id === taskId ? summary : null;
@@ -181,15 +183,15 @@ export function TaskProgressPage() {
       setPreviewLoading(false);
       return;
     }
-    setPreviewTarget((current) => {
-      if (current && current.documentUri === selectedDocumentUri) return current;
-      return {
-        documentUri: selectedDocumentUri,
-        conditionId: selectedDocument?.matched_conditions[0] || selectedDocument?.missing_conditions[0] || null,
-        page: selectedDocument?.evidence.find((item) => item.page !== null)?.page ?? null
-      };
-    });
-  }, [selectedDocument, selectedDocumentUri]);
+
+    if (previewTarget?.documentUri === selectedDocumentUri) return;
+
+    setPreviewTarget(null);
+    setPreviewMeta(null);
+    setPreviewContext(null);
+    setPreviewError(null);
+    setPreviewLoading(false);
+  }, [previewTarget?.documentUri, selectedDocumentUri]);
 
   useEffect(() => {
     if (!taskId || !previewTarget) return;
@@ -488,6 +490,7 @@ function ConditionMatrixPanel({
   const matrix = buildVerdictMatrix(documents, verdicts);
   const columns = matrix.columns;
   const gridTemplateColumns = [`minmax(220px, 1.2fr)`, ...columns.map(() => 'minmax(96px, 1fr)')].join(' ');
+  const matrixStyle = { ['--matrix-columns' as const]: gridTemplateColumns } as CSSProperties;
 
   return (
     <section className="phase3-panel">
@@ -505,7 +508,7 @@ function ConditionMatrixPanel({
         </div>
       ) : (
         <div className="matrix-table" role="table" aria-label="条件矩阵">
-          <div className="matrix-row matrix-head" role="row" style={{ gridTemplateColumns }}>
+          <div className="matrix-row matrix-head" role="row" style={matrixStyle}>
             <span role="columnheader">
               文档
             </span>
@@ -516,7 +519,7 @@ function ConditionMatrixPanel({
             ))}
           </div>
           {matrix.rows.map((row) => (
-            <div className={`matrix-row ${row.documentUri === selectedDocumentUri ? 'is-selected' : ''}`} key={row.documentUri} role="row" style={{ gridTemplateColumns }}>
+            <div className={`matrix-row ${row.documentUri === selectedDocumentUri ? 'is-selected' : ''}`} key={row.documentUri} role="row" style={matrixStyle}>
               <button
                 aria-current={row.documentUri === selectedDocumentUri ? 'true' : undefined}
                 className="matrix-document-button"
@@ -656,14 +659,14 @@ function QmdContextPanel({
       <div className="section-title-row">
         <div>
           <h2>原文上下文</h2>
-          <span>{document ? document.document_title || document.document_path : '点击条件矩阵或证据账本可切换上下文'}</span>
+          <span>{document ? document.document_title || document.document_path : '点击条件矩阵或证据账本查看原文上下文'}</span>
         </div>
         <span>{loading ? '加载中' : context?.source_tool || '待选中'}</span>
       </div>
       {!document ? (
         <div className="empty-state compact">
           <strong>请选择一份合同</strong>
-          <span>会自动加载该文档的原文预览和上下文。</span>
+          <span>点击条件矩阵或证据账本查看原文上下文。</span>
         </div>
       ) : (
         <div className="context-box">
@@ -691,7 +694,7 @@ function QmdContextPanel({
                 }
                 disabled={!documentUri}
               >
-                重新加载
+                {preview || context ? '重新加载' : '加载上下文'}
               </button>
               {canOpen ? (
                 <a className="mini-button" href={getQmdOpenLinkUrl(taskId, documentUri || '')}>
@@ -705,15 +708,22 @@ function QmdContextPanel({
               ) : null}
             </div>
           </div>
-          <div className="context-body">
-            <div className="context-text">{context?.text || '正在等待上下文内容'}</div>
-            <div className="context-meta">
-              <span>{conditionLabel}</span>
-              <span>{pageLabel}</span>
-              <span>{anchorLabel}</span>
-              <span>{preview?.collection || document.collection || 'collection：-'}</span>
+          {!preview && !context && !loading && !error ? (
+            <div className="empty-state compact context-idle">
+              <strong>点击条件矩阵或证据账本查看原文上下文</strong>
+              <span>选择一个条件后，这里会加载对应的原文预览与上下文。</span>
             </div>
-          </div>
+          ) : (
+            <div className="context-body">
+              <div className="context-text">{context?.text || '正在等待上下文内容'}</div>
+              <div className="context-meta">
+                <span>{conditionLabel}</span>
+                <span>{pageLabel}</span>
+                <span>{anchorLabel}</span>
+                <span>{preview?.collection || document.collection || 'collection：-'}</span>
+              </div>
+            </div>
+          )}
           {preview?.toc?.length ? (
             <div className="context-toc">
               <strong>目录</strong>
@@ -736,16 +746,17 @@ function EvidencePanel({ document, taskId, onReviewed }: { document: DocumentRes
   const [reviewNote, setReviewNote] = useState('');
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const normalizedDocument = useMemo(() => (document ? normalizeDocumentResultItem(document) : null), [document]);
 
   useEffect(() => {
-    if (!document) return;
-    setReviewDecision(document.review_decision || document.decision);
-    setReviewNote(document.review_note || '');
+    if (!normalizedDocument) return;
+    setReviewDecision(normalizedDocument.review_decision || normalizedDocument.decision);
+    setReviewNote(normalizedDocument.review_note || '');
     setSaveError(null);
-  }, [document?.result_id]);
+  }, [normalizedDocument?.result_id]);
 
   async function handleSaveReview() {
-    if (!document) return;
+    if (!normalizedDocument) return;
     const trimmedReviewer = reviewerName.trim();
     if (!trimmedReviewer) {
       setSaveError('请输入复核人');
@@ -757,15 +768,16 @@ function EvidencePanel({ document, taskId, onReviewed }: { document: DocumentRes
     try {
       setReviewerName(trimmedReviewer);
       setReviewerNameState(trimmedReviewer);
-      const response = await reviewDocumentResult(taskId, document.result_id, {
+      const response = await reviewDocumentResult(taskId, normalizedDocument.result_id, {
         review_status: 'reviewed',
         review_decision: reviewDecision,
         review_note: reviewNote.trim() || undefined,
         reviewer_name: trimmedReviewer
       });
-      onReviewed(response.result);
-      setReviewDecision(response.result.review_decision || response.result.decision);
-      setReviewNote(response.result.review_note || '');
+      const normalizedResult = normalizeDocumentResultItem(response.result);
+      onReviewed(normalizedResult);
+      setReviewDecision(normalizedResult.review_decision || normalizedResult.decision);
+      setReviewNote(normalizedResult.review_note || '');
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : '保存复核失败');
     } finally {
@@ -773,7 +785,7 @@ function EvidencePanel({ document, taskId, onReviewed }: { document: DocumentRes
     }
   }
 
-  if (!document) {
+  if (!normalizedDocument) {
     return (
       <div className="evidence-panel empty">
         <div className="empty-state">
@@ -789,38 +801,38 @@ function EvidencePanel({ document, taskId, onReviewed }: { document: DocumentRes
         <div className="panel-heading">
           <div>
             <h2>命中依据</h2>
-            <p>当前文档：{document.document_title || document.document_path}</p>
+            <p>当前文档：{normalizedDocument.document_title || normalizedDocument.document_path}</p>
           </div>
         </div>
         <section className="detail-block">
           <h3>判断结果</h3>
           <p>
-            判断：{decisionLabels[document.decision]} · {document.reason}
+            判断：{decisionLabels[normalizedDocument.decision]} · {normalizedDocument.reason}
           </p>
           <div className="summary-grid phase3-summary-grid">
             <span>
               <strong>核验状态</strong>
-              {document.verification_status}
+              {normalizedDocument.verification_status}
             </span>
             <span>
               <strong>证据支持率</strong>
-              {Math.round(document.evidence_support_rate * 100)}%
+              {Math.round(normalizedDocument.evidence_support_rate * 100)}%
             </span>
             <span>
               <strong>不确定原因</strong>
-              {document.uncertain_reasons.length ? document.uncertain_reasons.join('、') : '无'}
+              {normalizedDocument.uncertain_reasons.length ? normalizedDocument.uncertain_reasons.join('、') : '无'}
             </span>
             <span>
               <strong>判定摘要</strong>
-              {Object.keys(document.decision_basis).length ? Object.keys(document.decision_basis).join('、') : '无'}
+              {Object.keys(normalizedDocument.decision_basis).length ? Object.keys(normalizedDocument.decision_basis).join('、') : '无'}
             </span>
           </div>
-          {document.review_status === 'reviewed' ? (
+          {normalizedDocument.review_status === 'reviewed' ? (
             <div className="review-status-box">
-              <strong>已复核：{document.reviewer_name || '未记录复核人'}</strong>
-              <span>人工结论：{document.review_decision ? decisionLabels[document.review_decision] : '未记录'}</span>
-              {document.reviewed_at ? <span>复核时间：{formatDateTime(document.reviewed_at)}</span> : null}
-              {document.review_note ? <p>{document.review_note}</p> : null}
+              <strong>已复核：{normalizedDocument.reviewer_name || '未记录复核人'}</strong>
+              <span>人工结论：{normalizedDocument.review_decision ? decisionLabels[normalizedDocument.review_decision] : '未记录'}</span>
+              {normalizedDocument.reviewed_at ? <span>复核时间：{formatDateTime(normalizedDocument.reviewed_at)}</span> : null}
+              {normalizedDocument.review_note ? <p>{normalizedDocument.review_note}</p> : null}
             </div>
           ) : null}
         </section>
@@ -849,8 +861,8 @@ function EvidencePanel({ document, taskId, onReviewed }: { document: DocumentRes
         </section>
         <section className="detail-block snippets-block">
           <h3>关键原文摘录</h3>
-          {document.evidence.length ? (
-            document.evidence.map((item, index) => (
+          {normalizedDocument.evidence.length ? (
+            normalizedDocument.evidence.map((item, index) => (
               <article className="snippet-item" key={`${item.condition_id}-${index}`}>
                 <div className="snippet-head">
                   <strong>{item.condition_id}</strong>
@@ -965,6 +977,46 @@ function resolveEvidenceDocumentUri(item: LedgerEvidenceItem, selectedDocument: 
 function tocEntryLabel(entry: Record<string, unknown>): string {
   const label = entry.title || entry.name || entry.label || entry.text;
   return typeof label === 'string' && label.trim() ? label : JSON.stringify(entry);
+}
+
+function normalizeTaskResults(results: TaskResults): TaskResults {
+  return {
+    ...results,
+    buckets: {
+      included: results.buckets.included.map(normalizeDocumentResultItem),
+      uncertain: results.buckets.uncertain.map(normalizeDocumentResultItem),
+      excluded: results.buckets.excluded.map(normalizeDocumentResultItem)
+    }
+  };
+}
+
+function normalizeDocumentResultItem(document: DocumentResultItem): DocumentResultItem {
+  return {
+    ...document,
+    matched_conditions: Array.isArray(document.matched_conditions)
+      ? document.matched_conditions.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      : [],
+    missing_conditions: Array.isArray(document.missing_conditions)
+      ? document.missing_conditions.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      : [],
+    evidence: Array.isArray(document.evidence) ? document.evidence : [],
+    confidence: typeof document.confidence === 'number' && Number.isFinite(document.confidence) ? document.confidence : 0,
+    review_status: document.review_status === 'reviewed' ? 'reviewed' : 'unreviewed',
+    review_decision: document.review_decision ?? null,
+    review_note: document.review_note ?? null,
+    reviewer_name: document.reviewer_name ?? null,
+    reviewed_at: document.reviewed_at ?? null,
+    decision_basis: isPlainObject(document.decision_basis) ? document.decision_basis : {},
+    uncertain_reasons: Array.isArray(document.uncertain_reasons)
+      ? document.uncertain_reasons.filter((reason): reason is string => typeof reason === 'string' && reason.trim().length > 0)
+      : [],
+    evidence_support_rate: typeof document.evidence_support_rate === 'number' && Number.isFinite(document.evidence_support_rate) ? document.evidence_support_rate : 0,
+    verification_status: document.verification_status || 'query_only'
+  };
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
 function flattenResults(results: TaskResults): DocumentResultItem[] {

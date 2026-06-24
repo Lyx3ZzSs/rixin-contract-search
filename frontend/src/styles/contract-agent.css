@@ -593,6 +593,7 @@ h1 {
   display: grid;
   gap: 8px;
   align-items: stretch;
+  grid-template-columns: var(--matrix-columns);
 }
 
 .matrix-head {
@@ -756,6 +757,10 @@ h1 {
   font-size: 13px;
   line-height: 1.75;
   white-space: pre-wrap;
+}
+
+.context-idle {
+  margin-top: 2px;
 }
 
 .context-meta {
