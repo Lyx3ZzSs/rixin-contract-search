@@ -191,12 +191,12 @@ class ScreeningCondition(BaseModel):
     operator: ConditionOperator = ConditionOperator.semantic_match
     value: str | int | float | bool | dict[str, Any] | list[Any]
     qmd_queries: list[str]
-    evidence_required: int = 1
+    evidence_required: int = Field(default=1, ge=1)
     structured: bool
     condition_type: ConditionType = ConditionType.semantic_risk
     normalization_hint: dict[str, Any] = Field(default_factory=dict)
     verification_strategy: VerificationStrategy = VerificationStrategy.query_only
-    required_evidence_count: int = 1
+    required_evidence_count: int = Field(default=1, ge=1)
     negative_evidence_allowed: bool = False
 
     @model_validator(mode="before")
@@ -221,7 +221,7 @@ class ScreeningCondition(BaseModel):
 
 class ScreeningPlanPayload(BaseModel):
     target: Literal["qmd_document"] = "qmd_document"
-    plan_version: Literal[1, 2] = 1
+    plan_version: int = Field(default=1, ge=1, le=2, strict=True)
     conditions: list[ScreeningCondition] = Field(min_length=1)
     decision_policy: Literal[
         "phase1_keyword_candidate_uncertain_on_structured_comparison",

@@ -103,12 +103,58 @@ def test_screening_condition_preserves_v1_evidence_required():
     assert condition.required_evidence_count == 2
 
 
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    [
+        ("evidence_required", 0),
+        ("evidence_required", -1),
+        ("required_evidence_count", 0),
+        ("required_evidence_count", -1),
+    ],
+)
+def test_screening_condition_rejects_non_positive_evidence_counts(field_name, value):
+    payload = {
+        "id": "general_match",
+        "description": "包含验收付款条款",
+        "operator": "semantic_match",
+        "value": "验收付款条款",
+        "qmd_queries": ["验收付款"],
+        "structured": False,
+        field_name: value,
+    }
+
+    with pytest.raises(ValidationError):
+        ScreeningCondition.model_validate(payload)
+
+
 def test_screening_plan_rejects_unsupported_plan_version():
     with pytest.raises(ValidationError):
         ScreeningPlanPayload.model_validate(
             {
                 "target": "qmd_document",
                 "plan_version": 3,
+                "conditions": [
+                    {
+                        "id": "general_match",
+                        "description": "包含验收付款条款",
+                        "operator": "semantic_match",
+                        "value": "验收付款条款",
+                        "qmd_queries": ["验收付款"],
+                        "structured": False,
+                    }
+                ],
+                "decision_policy": "phase1_keyword_candidate_uncertain_on_structured_comparison",
+            }
+        )
+
+
+@pytest.mark.parametrize("plan_version", [True, 1.0])
+def test_screening_plan_rejects_non_integer_plan_versions(plan_version):
+    with pytest.raises(ValidationError):
+        ScreeningPlanPayload.model_validate(
+            {
+                "target": "qmd_document",
+                "plan_version": plan_version,
                 "conditions": [
                     {
                         "id": "general_match",
