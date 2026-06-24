@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
@@ -202,23 +203,20 @@ class ScreeningCondition(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def sync_evidence_count_aliases(cls, data: Any) -> Any:
-        if not isinstance(data, dict):
+        if not isinstance(data, Mapping):
             return data
 
         data = dict(data)
-        if "required_evidence_count" in data and "evidence_required" in data:
-            if data["required_evidence_count"] != data["evidence_required"]:
-                raise ValueError("evidence_required and required_evidence_count must match")
-        elif "required_evidence_count" in data:
+        if "required_evidence_count" in data and "evidence_required" not in data:
             data["evidence_required"] = data["required_evidence_count"]
-        elif "evidence_required" in data:
+        elif "evidence_required" in data and "required_evidence_count" not in data:
             data["required_evidence_count"] = data["evidence_required"]
         return data
 
     @model_validator(mode="after")
     def keep_evidence_count_aliases_in_sync(self) -> "ScreeningCondition":
         if self.evidence_required != self.required_evidence_count:
-            self.evidence_required = self.required_evidence_count
+            raise ValueError("evidence_required and required_evidence_count must match")
         return self
 
 

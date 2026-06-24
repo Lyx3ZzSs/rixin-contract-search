@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from datetime import datetime
 from uuid import uuid4
 
@@ -12,6 +13,20 @@ from app.schemas import (
     ScreeningCondition,
     ScreeningPlanPayload,
 )
+
+
+class ConditionPayloadMapping(Mapping):
+    def __init__(self, data):
+        self._data = data
+
+    def __getitem__(self, key):
+        return self._data[key]
+
+    def __iter__(self):
+        return iter(self._data)
+
+    def __len__(self):
+        return len(self._data)
 
 
 def test_screening_plan_v2_accepts_structured_amount_condition():
@@ -147,6 +162,42 @@ def test_screening_condition_rejects_conflicting_evidence_count_aliases():
                 "structured": False,
             }
         )
+
+
+def test_screening_condition_accepts_coercible_same_evidence_count_aliases():
+    condition = ScreeningCondition.model_validate(
+        {
+            "id": "general_match",
+            "description": "包含验收付款条款",
+            "operator": "semantic_match",
+            "value": "验收付款条款",
+            "qmd_queries": ["验收付款"],
+            "evidence_required": "2",
+            "required_evidence_count": 2,
+            "structured": False,
+        }
+    )
+
+    assert condition.evidence_required == 2
+    assert condition.required_evidence_count == 2
+
+
+def test_screening_condition_rejects_mapping_conflicting_evidence_count_aliases():
+    payload = ConditionPayloadMapping(
+        {
+            "id": "general_match",
+            "description": "包含验收付款条款",
+            "operator": "semantic_match",
+            "value": "验收付款条款",
+            "qmd_queries": ["验收付款"],
+            "evidence_required": 2,
+            "required_evidence_count": 3,
+            "structured": False,
+        }
+    )
+
+    with pytest.raises(ValidationError):
+        ScreeningCondition.model_validate(payload)
 
 
 def test_screening_plan_rejects_unsupported_plan_version():
