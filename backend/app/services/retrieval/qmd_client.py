@@ -1,6 +1,6 @@
 from json import JSONDecodeError
 from typing import Any
-from urllib.parse import unquote, urlsplit
+from urllib.parse import unquote_to_bytes, urlsplit
 
 import httpx
 from pydantic import BaseModel, Field
@@ -154,16 +154,20 @@ class QmdClient:
         structured = payload.get("structuredContent")
         if isinstance(structured, dict):
             toc = structured.get("toc")
+            open_url = structured.get("open_url")
+            download_url = structured.get("download_url")
+            open_url = open_url if isinstance(open_url, str) and open_url else None
+            download_url = download_url if isinstance(download_url, str) and download_url else None
             return {
                 "document_uri": safe_uri,
                 "document_title": structured.get("title"),
                 "collection": structured.get("collection"),
                 "toc": toc if isinstance(toc, list) else [],
                 "summary": structured.get("summary"),
-                "can_open": bool(structured.get("open_url")),
-                "can_download": bool(structured.get("download_url")),
-                "open_url": structured.get("open_url"),
-                "download_url": structured.get("download_url"),
+                "can_open": open_url is not None,
+                "can_download": download_url is not None,
+                "open_url": open_url,
+                "download_url": download_url,
             }
         text = extract_text(payload)
         return {
@@ -311,19 +315,23 @@ def validate_qmd_document_uri(document_uri: str) -> str:
         raise QmdUnavailable("qmd document URI requires a collection")
     if not parsed.path or parsed.path == "/":
         raise QmdUnavailable("qmd document URI requires a document path")
-    decoded_collection = unquote(parsed.netloc)
+    if parsed.query or parsed.fragment:
+        raise QmdUnavailable("qmd document URI must not include query or fragment")
+    decoded_collection = strict_percent_decode(parsed.netloc)
     if (
         "\x00" in value
         or decoded_collection in {".", ".."}
         or "\x00" in decoded_collection
         or "/" in decoded_collection
         or "\\" in decoded_collection
+        or "@" in decoded_collection
+        or ":" in decoded_collection
     ):
         raise QmdUnavailable("qmd document URI contains an unsafe path segment")
 
     segments = parsed.path.split("/")[1:]
     for segment in segments:
-        decoded = unquote(segment)
+        decoded = strict_percent_decode(segment)
         if (
             decoded in {"", ".", ".."}
             or "\x00" in decoded
@@ -332,6 +340,21 @@ def validate_qmd_document_uri(document_uri: str) -> str:
         ):
             raise QmdUnavailable("qmd document URI contains an unsafe path segment")
     return value
+
+
+def strict_percent_decode(value: str) -> str:
+    for index, char in enumerate(value):
+        if char != "%":
+            continue
+        escape = value[index + 1 : index + 3]
+        if len(escape) != 2 or any(
+            item not in "0123456789abcdefABCDEF" for item in escape
+        ):
+            raise QmdUnavailable("qmd document URI contains invalid percent encoding")
+    try:
+        return unquote_to_bytes(value).decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise QmdUnavailable("qmd document URI contains invalid percent encoding") from exc
 
 
 def normalize_qmd_file(file_value: str, fallback_collection: str) -> tuple[str, str, str]:
