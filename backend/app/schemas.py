@@ -180,7 +180,7 @@ class ScreeningCondition(BaseModel):
 
 class ScreeningPlanPayload(BaseModel):
     target: Literal["qmd_document"] = "qmd_document"
-    conditions: list[ScreeningCondition]
+    conditions: list[ScreeningCondition] = Field(min_length=1)
     decision_policy: Literal[
         "phase1_keyword_candidate_uncertain_on_structured_comparison"
     ] = "phase1_keyword_candidate_uncertain_on_structured_comparison"

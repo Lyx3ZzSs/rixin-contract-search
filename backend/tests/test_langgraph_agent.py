@@ -1,7 +1,10 @@
 from uuid import uuid4
 
+from sqlalchemy import create_engine
 from sqlalchemy import select
+from sqlalchemy.orm import sessionmaker
 
+from app.db import Base
 from app.enums import ResultDecision, TaskStatus
 from app.models import ScreeningDocumentResult, ScreeningPlan, ScreeningTask, StreamEvent
 from app.schemas import ScreeningCondition, ScreeningPlanPayload
@@ -102,6 +105,47 @@ def test_langgraph_agent_refines_queries_and_persists_document_result(db_session
 
     events = session.scalars(select(StreamEvent).where(StreamEvent.task_id == task.id).order_by(StreamEvent.sequence)).all()
     assert "agent_refining_queries" in [event.event_type for event in events]
+
+
+def test_langgraph_agent_commits_progress_events_before_slow_qmd_query(tmp_path):
+    from app.services.agent.langgraph_agent import ContractScreeningAgent
+
+    db_path = tmp_path / "progress-events.db"
+    engine = create_engine(f"sqlite+pysqlite:///{db_path}", future=True)
+    Base.metadata.create_all(engine)
+    TestingSession = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+    observed_event_types = []
+
+    with TestingSession() as session:
+        task = ScreeningTask(
+            id=uuid4(),
+            owner_id="internal-user",
+            title="金额筛选",
+            raw_query="筛选合同总价包含人民币100万元的合同",
+            status=TaskStatus.retrieving.value,
+            current_stage=TaskStatus.retrieving.value,
+            progress_percent=10,
+            metrics={},
+        )
+        session.add(task)
+        session.commit()
+
+        class ObservingQmdClient(RecordingQmdClient):
+            def query(self, query_text: str, collections: list[str], limit: int):
+                with TestingSession() as observer:
+                    events = observer.scalars(select(StreamEvent).where(StreamEvent.task_id == task.id).order_by(StreamEvent.sequence)).all()
+                    observed_event_types.append([event.event_type for event in events])
+                return super().query(query_text, collections, limit)
+
+        ContractScreeningAgent(
+            llm=ScriptedAgentLlm(),
+            qmd=ObservingQmdClient(),
+            collections=["company_docs"],
+            top_k=5,
+            max_retrieval_rounds=2,
+        ).run(session, task)
+
+    assert any("qmd_searching" in event_types for event_types in observed_event_types)
 
 
 class InvalidPlanLlm(ScriptedAgentLlm):

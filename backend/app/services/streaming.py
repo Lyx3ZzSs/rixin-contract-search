@@ -18,6 +18,32 @@ def append_stream_event(session: Session, task_id: UUID, event_type: str, payloa
     return event
 
 
+def publish_stream_event(
+    session: Session,
+    task: ScreeningTask,
+    event_type: str,
+    payload: dict,
+    *,
+    status: str | None = None,
+    current_stage: str | None = None,
+    progress_percent: int | None = None,
+) -> StreamEvent:
+    if status is not None:
+        task.status = status
+    if current_stage is not None:
+        task.current_stage = current_stage
+    if progress_percent is not None:
+        task.progress_percent = progress_percent
+
+    event_payload = dict(payload)
+    event_payload.setdefault("status", task.status)
+    event_payload.setdefault("current_stage", task.current_stage)
+    event_payload.setdefault("progress_percent", task.progress_percent)
+    event = append_stream_event(session, task.id, event_type, event_payload)
+    session.commit()
+    return event
+
+
 def event_id(task_id: UUID, sequence: int) -> str:
     return f"{task_id}:{sequence}"
 

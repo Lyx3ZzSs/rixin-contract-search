@@ -1,8 +1,39 @@
 import json
 from typing import Any, Protocol
 
+from pydantic import ValidationError
+
 from app.config import settings
 from app.schemas import ScreeningPlanPayload
+
+
+PLAN_OUTPUT_SCHEMA = {
+    "target": "qmd_document",
+    "conditions": [
+        {
+            "id": "short_english_id",
+            "description": "条件中文描述",
+            "operator": "semantic_match",
+            "value": "条件值",
+            "qmd_queries": ["用于qmd检索的中文查询"],
+            "evidence_required": 1,
+            "structured": False,
+        }
+    ],
+    "decision_policy": "phase1_keyword_candidate_uncertain_on_structured_comparison",
+}
+
+PLAN_SYSTEM_PROMPT = (
+    "你是合同筛选Agent的规划器。只输出一个JSON对象，不要输出解释、Markdown或代码块。"
+    "输出对象必须只有业务计划字段：target、conditions、decision_policy。"
+    "不要返回task、raw_query、schema、example、说明文字。"
+    "conditions必须是非空数组，每个条件都必须包含id、description、operator、value、qmd_queries、evidence_required、structured。"
+)
+
+PLAN_REPAIR_SYSTEM_PROMPT = (
+    "你是合同筛选Agent的JSON修复器。只输出修复后的业务计划JSON对象。"
+    "不要复述输入，不要返回task/raw_query/schema/invalid_response。"
+)
 
 
 class AgentLlm(Protocol):
@@ -22,6 +53,10 @@ class AgentLlmConfigurationError(RuntimeError):
         self.code = "agent_llm_not_configured"
 
 
+class AgentLlmPlanError(ValueError):
+    pass
+
+
 class OpenAICompatibleAgentLlm:
     def __init__(self):
         from langchain_openai import ChatOpenAI
@@ -34,29 +69,34 @@ class OpenAICompatibleAgentLlm:
         )
 
     def plan(self, raw_query: str) -> ScreeningPlanPayload:
-        data = self._json(
-            "你是合同筛选Agent的规划器。只输出JSON，不要输出解释。",
-            {
-                "task": "将用户筛选要求拆成可检索的合同筛选条件。",
-                "raw_query": raw_query,
-                "schema": {
-                    "target": "qmd_document",
-                    "conditions": [
-                        {
-                            "id": "短英文id",
-                            "description": "条件中文描述",
-                            "operator": "semantic_match",
-                            "value": "条件值",
-                            "qmd_queries": ["用于qmd检索的中文查询"],
-                            "evidence_required": 1,
-                            "structured": False,
-                        }
-                    ],
-                    "decision_policy": "phase1_keyword_candidate_uncertain_on_structured_comparison",
+        payload = {
+            "task": "将用户筛选要求拆成可检索的合同筛选条件。",
+            "raw_query": raw_query,
+            "required_output_schema": PLAN_OUTPUT_SCHEMA,
+            "rules": [
+                "只返回required_output_schema形状的JSON对象。",
+                "conditions必须根据raw_query生成，不能使用示例占位值。",
+                "每个qmd_queries条目应是可直接用于合同库检索的中文查询。",
+            ],
+        }
+        data = self._json(PLAN_SYSTEM_PROMPT, payload)
+        try:
+            return _validate_plan_response(data)
+        except AgentLlmPlanError as first_error:
+            repaired = self._json(
+                PLAN_REPAIR_SYSTEM_PROMPT,
+                {
+                    "task": "修复上一轮合同筛选计划JSON。",
+                    "raw_query": raw_query,
+                    "required_output_schema": PLAN_OUTPUT_SCHEMA,
+                    "invalid_response": data,
+                    "validation_error": str(first_error),
                 },
-            },
-        )
-        return ScreeningPlanPayload.model_validate(data)
+            )
+            try:
+                return _validate_plan_response(repaired)
+            except AgentLlmPlanError as second_error:
+                raise AgentLlmPlanError(f"{second_error}; first_attempt_error={first_error}") from second_error
 
     def refine_queries(self, raw_query: str, plan: ScreeningPlanPayload, missing_condition_ids: list[str]) -> dict[str, list[str]]:
         data = self._json(
@@ -94,12 +134,94 @@ class OpenAICompatibleAgentLlm:
         from langchain_core.messages import HumanMessage, SystemMessage
 
         response = self.model.invoke([SystemMessage(content=system), HumanMessage(content=json.dumps(payload, ensure_ascii=False))])
-        content = str(response.content).strip()
-        if content.startswith("```"):
-            content = content.strip("`")
-            if content.startswith("json"):
-                content = content[4:].strip()
+        content = _extract_json_text(str(response.content))
         return json.loads(content)
+
+
+def _validate_plan_response(data: Any) -> ScreeningPlanPayload:
+    candidate = _extract_plan_candidate(data)
+    try:
+        return ScreeningPlanPayload.model_validate(candidate)
+    except ValidationError as exc:
+        raise AgentLlmPlanError(f"invalid screening plan JSON: {exc}") from exc
+
+
+def _extract_plan_candidate(data: Any) -> dict[str, Any]:
+    if not isinstance(data, dict):
+        raise AgentLlmPlanError(f"expected JSON object with conditions, got {type(data).__name__}")
+
+    if "conditions" in data:
+        return _normalize_plan_shape(data)
+
+    for key in ("plan", "screening_plan", "result", "output"):
+        value = data.get(key)
+        if isinstance(value, dict) and "conditions" in value:
+            return _normalize_plan_shape(value)
+
+    if "condition" in data and isinstance(data["condition"], dict):
+        candidate = dict(data)
+        candidate["conditions"] = [candidate.pop("condition")]
+        return _normalize_plan_shape(candidate)
+
+    if "filters" in data and isinstance(data["filters"], list):
+        candidate = dict(data)
+        candidate["conditions"] = candidate.pop("filters")
+        return _normalize_plan_shape(candidate)
+
+    prompt_keys = {"task", "raw_query", "schema", "required_output_schema"}
+    if prompt_keys & data.keys():
+        raise AgentLlmPlanError("conditions field is required; model returned prompt metadata instead of the screening plan")
+    raise AgentLlmPlanError("conditions field is required in screening plan JSON")
+
+
+def _normalize_plan_shape(data: dict[str, Any]) -> dict[str, Any]:
+    candidate = dict(data)
+    conditions = candidate.get("conditions")
+    if isinstance(conditions, dict):
+        conditions = list(conditions.values())
+    if isinstance(conditions, list):
+        candidate["conditions"] = [_normalize_condition(item) for item in conditions]
+    return candidate
+
+
+def _normalize_condition(item: Any) -> Any:
+    if not isinstance(item, dict):
+        return item
+    condition = dict(item)
+    if "operator" not in condition:
+        condition["operator"] = "semantic_match"
+    if "structured" not in condition:
+        condition["structured"] = False
+    if "value" not in condition and isinstance(condition.get("description"), str):
+        condition["value"] = condition["description"]
+    if "qmd_queries" not in condition:
+        for key in ("queries", "search_queries", "qmd_query", "query"):
+            value = condition.get(key)
+            if value:
+                condition["qmd_queries"] = value
+                break
+    if isinstance(condition.get("qmd_queries"), str):
+        condition["qmd_queries"] = [condition["qmd_queries"]]
+    return condition
+
+
+def _extract_json_text(content: str) -> str:
+    content = content.strip()
+    if content.startswith("```"):
+        lines = content.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+        content = "\n".join(lines).strip()
+    if content.startswith("json"):
+        content = content[4:].strip()
+    if not content.startswith("{"):
+        start = content.find("{")
+        end = content.rfind("}")
+        if start >= 0 and end > start:
+            content = content[start : end + 1]
+    return content
 
 
 def create_agent_llm() -> AgentLlm:

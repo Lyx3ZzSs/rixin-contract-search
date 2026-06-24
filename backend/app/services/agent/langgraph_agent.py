@@ -11,7 +11,7 @@ from app.services.agent.aggregator import aggregate_document_candidates
 from app.services.agent.llm import AgentLlm
 from app.services.audit import write_audit
 from app.services.retrieval.qmd_client import ensure_collections_available, persist_qmd_results
-from app.services.streaming import append_stream_event
+from app.services.streaming import publish_stream_event
 
 
 class AgentExecutionError(RuntimeError):
@@ -93,15 +93,28 @@ class ContractScreeningAgent:
         db_plan = ScreeningPlan(task_id=task.id, plan_json=plan.model_dump())
         session.add(db_plan)
         session.flush()
-        append_stream_event(session, task.id, "criteria_parsed", {"plan_id": str(db_plan.id), "conditions": [{"id": c.id, "description": c.description} for c in plan.conditions]})
+        publish_stream_event(
+            session,
+            task,
+            "criteria_parsed",
+            {"plan_id": str(db_plan.id), "conditions": [{"id": c.id, "description": c.description} for c in plan.conditions]},
+            current_stage="planning",
+            progress_percent=20,
+        )
         return {**state, "plan": plan}
 
     def _check_collections(self, state: AgentState) -> AgentState:
         session = state["session"]
         task = state["task"]
-        append_stream_event(session, task.id, "qmd_checking", {"collections": state["collections"]})
+        publish_stream_event(
+            session,
+            task,
+            "qmd_checking",
+            {"collections": state["collections"]},
+            current_stage="qmd_checking",
+            progress_percent=25,
+        )
         ensure_collections_available(self.qmd.status(), state["collections"])
-        task.progress_percent = 25
         return state
 
     def _retrieve(self, state: AgentState) -> AgentState:
@@ -119,13 +132,27 @@ class ContractScreeningAgent:
                 query_key = (condition.id, query)
                 if query_key in executed:
                     continue
-                append_stream_event(session, task.id, "qmd_searching", {"query_text": query, "condition_id": condition.id, "collections": collections, "round": retrieval_round})
+                publish_stream_event(
+                    session,
+                    task,
+                    "qmd_searching",
+                    {"query_text": query, "condition_id": condition.id, "collections": collections, "round": retrieval_round},
+                    current_stage=TaskStatus.retrieving.value,
+                    progress_percent=35,
+                )
                 results = self.qmd.query(query, collections, self.top_k)
                 executed.add(query_key)
                 count = persist_qmd_results(session, task, condition.id, query, results, fallback_collection)
                 added += count
                 write_audit(session, AuditEventType.qmd_query.value, {"task_id": str(task.id), "condition_id": condition.id, "query_text": query, "candidate_count": count}, task=task)
-                append_stream_event(session, task.id, "qmd_retrieved", {"query_text": query, "condition_id": condition.id, "candidate_count": count, "round": retrieval_round})
+                publish_stream_event(
+                    session,
+                    task,
+                    "qmd_retrieved",
+                    {"query_text": query, "condition_id": condition.id, "candidate_count": count, "round": retrieval_round},
+                    current_stage=TaskStatus.retrieving.value,
+                    progress_percent=55,
+                )
         missing = self._missing_condition_ids(session, task, plan)
         should_refine = bool(missing) and retrieval_round < self.max_retrieval_rounds
         return {
@@ -157,7 +184,14 @@ class ContractScreeningAgent:
         if changed:
             db_plan = session.scalars(select(ScreeningPlan).where(ScreeningPlan.task_id == task.id)).one()
             db_plan.plan_json = plan.model_dump()
-        append_stream_event(session, task.id, "agent_refining_queries", {"missing_condition_ids": missing, "added": additions})
+        publish_stream_event(
+            session,
+            task,
+            "agent_refining_queries",
+            {"missing_condition_ids": missing, "added": additions},
+            current_stage=TaskStatus.retrieving.value,
+            progress_percent=60,
+        )
         return {**state, "plan": plan, "should_refine": False}
 
     def _classify(self, state: AgentState) -> AgentState:
@@ -167,6 +201,15 @@ class ContractScreeningAgent:
         task.status = TaskStatus.classifying.value
         task.current_stage = TaskStatus.classifying.value
         task.progress_percent = 75
+        publish_stream_event(
+            session,
+            task,
+            "classification_started",
+            {},
+            status=TaskStatus.classifying.value,
+            current_stage=TaskStatus.classifying.value,
+            progress_percent=75,
+        )
         documents = aggregate_document_candidates(session, task.id, plan)
         total = max(1, len(documents))
         for index, document in enumerate(documents.values(), start=1):
@@ -186,9 +229,25 @@ class ContractScreeningAgent:
             )
             session.add(result)
             write_audit(session, AuditEventType.classification_completed.value, {"task_id": str(task.id), "document_uri": result.document_uri, "decision": result.decision, "reason": result.reason, "confidence": result.confidence}, task=task)
-            append_stream_event(session, task.id, "document_classified", {"document_uri": result.document_uri, "document_path": result.document_path, "decision": result.decision, "reason": result.reason})
             task.progress_percent = min(95, 80 + int(15 * index / total))
-            append_stream_event(session, task.id, "progress", {"status": task.status, "progress_percent": task.progress_percent, "reviewed": index})
+            publish_stream_event(
+                session,
+                task,
+                "document_classified",
+                {"document_uri": result.document_uri, "document_path": result.document_path, "decision": result.decision, "reason": result.reason},
+                status=TaskStatus.classifying.value,
+                current_stage=TaskStatus.classifying.value,
+                progress_percent=task.progress_percent,
+            )
+            publish_stream_event(
+                session,
+                task,
+                "progress",
+                {"reviewed": index},
+                status=TaskStatus.classifying.value,
+                current_stage=TaskStatus.classifying.value,
+                progress_percent=task.progress_percent,
+            )
         return {**state, "document_count": len(documents)}
 
     def _missing_condition_ids(self, session: Session, task: ScreeningTask, plan: ScreeningPlanPayload) -> list[str]:

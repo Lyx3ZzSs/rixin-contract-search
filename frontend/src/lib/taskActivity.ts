@@ -37,6 +37,7 @@ const EVENT_STAGE: Record<string, TaskStageKey> = {
   qmd_checking: 'check',
   qmd_searching: 'retrieve',
   qmd_retrieved: 'retrieve',
+  classification_started: 'classify',
   document_classified: 'classify',
   progress: 'classify',
   task_completed: 'complete',
@@ -175,6 +176,7 @@ function activityText(event: StreamEvent): string {
   if (event.type === 'qmd_checking') return qmdCheckingText(event.payload);
   if (event.type === 'qmd_searching') return `正在检索 ${payloadString(event.payload, 'query_text') || payloadString(event.payload, 'query')}`.trim();
   if (event.type === 'qmd_retrieved') return `返回 ${payloadNumber(event.payload, 'candidate_count')} 条候选`;
+  if (event.type === 'classification_started') return '开始分析候选文档';
   if (event.type === 'document_classified') return `${documentLabel(event.payload)} 判断为 ${payloadString(event.payload, 'decision')}`.trim();
   if (event.type === 'progress') return `已分析 ${payloadNumber(event.payload, 'reviewed')} 份文档`;
   if (event.type === 'task_completed') return '任务已生成结果';
