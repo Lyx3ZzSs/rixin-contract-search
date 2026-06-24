@@ -102,18 +102,30 @@ def _judge_condition(
         raw = llm.judge_condition(plan, condition, _serialize_document(document), evidence)
     except Exception as exc:
         raw = {"verdict": ConditionVerdictValue.unknown.value, "confidence": 0.0, "supporting_evidence": [], "contradicting_evidence": [], "missing_reason": str(exc)}
-    return _normalize_raw_verdict(raw, evidence, evidence_reason)
+    return _normalize_raw_verdict(raw, evidence, evidence_reason, condition)
 
 
-def _normalize_raw_verdict(raw: dict[str, Any], fallback_evidence: list[dict[str, Any]], evidence_reason: str | None) -> dict[str, Any]:
+def _normalize_raw_verdict(
+    raw: dict[str, Any],
+    fallback_evidence: list[dict[str, Any]],
+    evidence_reason: str | None,
+    condition: ScreeningCondition,
+) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raw = {}
     verdict = str(raw.get("verdict", ConditionVerdictValue.unknown.value))
     if verdict not in {item.value for item in ConditionVerdictValue}:
         verdict = ConditionVerdictValue.unknown.value
-    supporting = _normalize_evidence_list(raw.get("supporting_evidence"), fallback_evidence)
+    supporting = _normalize_evidence_list(
+        raw.get("supporting_evidence"),
+        fallback_evidence,
+        allow_fallback_when_unmatched=verdict == ConditionVerdictValue.satisfied.value,
+    )
     contradicting = _normalize_evidence_list(raw.get("contradicting_evidence"), [])
     missing_reason = raw.get("missing_reason")
+    required_evidence_count = max(1, int(getattr(condition, "required_evidence_count", 1) or getattr(condition, "evidence_required", 1) or 1))
+    trusted_supporting_count = len(supporting)
+
     if not supporting:
         if evidence_reason == "unsupported_verification_strategy":
             verdict = ConditionVerdictValue.unknown.value
@@ -123,11 +135,17 @@ def _normalize_raw_verdict(raw: dict[str, Any], fallback_evidence: list[dict[str
             missing_reason = missing_reason or "supporting_evidence_required"
         elif missing_reason is None:
             missing_reason = evidence_reason or "supporting_evidence_required"
+    elif verdict == ConditionVerdictValue.satisfied.value and trusted_supporting_count < required_evidence_count:
+        verdict = ConditionVerdictValue.unknown.value
+        missing_reason = "insufficient_supporting_evidence"
     if verdict == ConditionVerdictValue.unknown.value and not supporting and missing_reason is None:
         missing_reason = "supporting_evidence_required"
+    confidence = _clamp_confidence(raw.get("confidence", 0.0))
+    if verdict == ConditionVerdictValue.unknown.value and (not supporting or trusted_supporting_count < required_evidence_count):
+        confidence = 0.0
     return {
         "verdict": verdict,
-        "confidence": 0.0 if not supporting and verdict == ConditionVerdictValue.unknown.value else _clamp_confidence(raw.get("confidence", 0.0)),
+        "confidence": confidence,
         "supporting_evidence": supporting,
         "contradicting_evidence": contradicting,
         "missing_reason": str(missing_reason) if missing_reason is not None else None,
@@ -158,7 +176,13 @@ def _persist_condition_verdict(
 
 def _build_document_result(task: ScreeningTask, document: dict[str, Any], plan: ScreeningPlanPayload, verdicts: list[ConditionVerdict]) -> ScreeningDocumentResult:
     total = max(1, len(plan.conditions))
-    supported = sum(1 for verdict in verdicts if verdict.supporting_evidence)
+    condition_requirements = {condition.id: max(1, int(condition.required_evidence_count or condition.evidence_required or 1)) for condition in plan.conditions}
+    supported = sum(
+        1
+        for verdict in verdicts
+        if verdict.verdict == ConditionVerdictValue.satisfied.value
+        and len(verdict.supporting_evidence) >= condition_requirements.get(verdict.condition_id, 1)
+    )
     support_rate = round(supported / total, 4)
     matched_conditions = [verdict.condition_id for verdict in verdicts if verdict.verdict == ConditionVerdictValue.satisfied.value]
     missing_conditions = [verdict.condition_id for verdict in verdicts if verdict.verdict in {ConditionVerdictValue.unknown.value, ConditionVerdictValue.conflicting.value}]
@@ -267,10 +291,56 @@ def _first_match(payload: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
-def _normalize_evidence_list(value: Any, fallback: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _normalize_evidence_list(
+    value: Any,
+    fallback: list[dict[str, Any]],
+    *,
+    allow_fallback_when_unmatched: bool = False,
+) -> list[dict[str, Any]]:
     if not isinstance(value, list):
-        return list(fallback)
-    return [item for item in value if isinstance(item, dict)]
+        return list(fallback) if allow_fallback_when_unmatched else []
+    normalized: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        resolved = _resolve_evidence_item(item, fallback)
+        if resolved is not None:
+            normalized.append(resolved)
+    if normalized:
+        return normalized
+    return list(fallback) if allow_fallback_when_unmatched else []
+
+
+def _resolve_evidence_item(item: dict[str, Any], fallback: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for candidate in fallback:
+        if _evidence_matches(item, candidate):
+            return candidate
+    return None
+
+
+def _evidence_matches(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    shared_identifiers = False
+    for key in ("artifact_ref", "document_uri", "condition_id", "source_tool", "page", "anchor", "text", "context"):
+        if key not in left or left.get(key) is None:
+            continue
+        shared_identifiers = True
+        if not _evidence_field_matches(key, left.get(key), right.get(key)):
+            return False
+    return shared_identifiers
+
+
+def _evidence_field_matches(key: str, left_value: Any, right_value: Any) -> bool:
+    if key == "page":
+        return _coerce_int(left_value) == _coerce_int(right_value)
+    if key in {"artifact_ref", "document_uri", "condition_id", "source_tool", "anchor", "text", "context"}:
+        return _normalized_evidence_text(left_value) == _normalized_evidence_text(right_value)
+    return left_value == right_value
+
+
+def _normalized_evidence_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    return str(value).strip()
 
 
 def _condition_basis_item(verdict: ConditionVerdict) -> dict[str, Any]:

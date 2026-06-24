@@ -87,6 +87,56 @@ class EmptyEvidenceSatisfiedLlm(VerdictLlm):
         }
 
 
+class ForgedEvidenceSatisfiedLlm(VerdictLlm):
+    def judge_condition(self, plan, condition, document, evidence):
+        forged = {
+            "page": 999,
+            "text": "伪造的证据",
+            "context": "伪造的上下文",
+            "source": "qmd",
+            "score": 0.01,
+            "condition_id": condition.id,
+            "artifact_ref": "qmd://fake/contracts/forged.md",
+            "document_uri": "qmd://fake/contracts/forged.md",
+            "role": "supporting",
+            "source_tool": "manual_upload",
+            "document_path": "/tmp/forged.md",
+            "collection": "fake_collection",
+            "anchor": "fake-anchor",
+            "used_for_decision": True,
+        }
+        return {
+            "verdict": "satisfied",
+            "confidence": 0.86,
+            "supporting_evidence": [forged],
+            "contradicting_evidence": [],
+            "missing_reason": None,
+        }
+
+
+class StrictCountVerdictLlm(VerdictLlm):
+    def plan(self, raw_query: str):
+        return ScreeningPlanPayload(
+            target="qmd_document",
+            plan_version=2,
+            conditions=[
+                ScreeningCondition(
+                    id="amount",
+                    description="合同总价大于等于100万元",
+                    condition_type="amount",
+                    operator="gte",
+                    value=1000000,
+                    qmd_queries=["合同总价 人民币 金额"],
+                    verification_strategy="grep_then_read",
+                    required_evidence_count=2,
+                    evidence_required=2,
+                    structured=True,
+                )
+            ],
+            decision_policy="all_required_conditions_satisfied_else_uncertain_on_missing_or_conflict",
+        )
+
+
 class QueryOnlyQmd:
     def status(self):
         return {"collections": [{"name": "company_docs"}]}
@@ -250,6 +300,64 @@ def test_agent_fails_closed_when_deep_read_evidence_is_missing(db_session):
     assert result.decision == ResultDecision.uncertain.value
     assert result.evidence == []
     assert result.verification_status != VerificationStatus.deep_read_verified.value
+
+
+def test_agent_ignores_forged_llm_evidence_and_keeps_gathered_provenance(db_session):
+    from app.services.agent.langgraph_agent import ContractScreeningAgent
+
+    session, _ = db_session
+    task = ScreeningTask(
+        id=uuid4(),
+        owner_id="internal-user",
+        title="金额筛选",
+        raw_query="筛选合同总价大于等于100万元的合同",
+        status=TaskStatus.retrieving.value,
+        current_stage=TaskStatus.retrieving.value,
+        progress_percent=10,
+        metrics={},
+    )
+    session.add(task)
+    session.commit()
+
+    ContractScreeningAgent(llm=ForgedEvidenceSatisfiedLlm(), qmd=DeepReadQmd(), collections=["company_docs"], top_k=5, max_retrieval_rounds=1).run(session, task)
+
+    verdict = session.scalars(select(ConditionVerdict).where(ConditionVerdict.task_id == task.id)).one()
+    assert verdict.verdict == ConditionVerdictValue.satisfied.value
+    assert verdict.supporting_evidence[0]["source_tool"] == "doc_read"
+    assert verdict.supporting_evidence[0]["text"] == "第三页：合同总价为人民币120万元，含税。"
+    assert verdict.supporting_evidence[0]["artifact_ref"] == "qmd://company_docs/contracts/a.md"
+    assert verdict.supporting_evidence[0]["source_tool"] != "manual_upload"
+
+
+def test_agent_requires_minimum_supporting_evidence_count(db_session):
+    from app.services.agent.langgraph_agent import ContractScreeningAgent
+
+    session, _ = db_session
+    task = ScreeningTask(
+        id=uuid4(),
+        owner_id="internal-user",
+        title="金额筛选",
+        raw_query="筛选合同总价大于等于100万元的合同",
+        status=TaskStatus.retrieving.value,
+        current_stage=TaskStatus.retrieving.value,
+        progress_percent=10,
+        metrics={},
+    )
+    session.add(task)
+    session.commit()
+
+    ContractScreeningAgent(llm=StrictCountVerdictLlm(), qmd=DeepReadQmd(), collections=["company_docs"], top_k=5, max_retrieval_rounds=1).run(session, task)
+
+    verdict = session.scalars(select(ConditionVerdict).where(ConditionVerdict.task_id == task.id)).one()
+    assert verdict.verdict == ConditionVerdictValue.unknown.value
+    assert verdict.supporting_evidence != []
+    assert verdict.missing_reason == "insufficient_supporting_evidence"
+    assert verdict.confidence == 0.0
+
+    result = session.scalars(select(ScreeningDocumentResult).where(ScreeningDocumentResult.task_id == task.id)).one()
+    assert result.decision != ResultDecision.included.value
+    assert result.decision == ResultDecision.uncertain.value
+    assert result.evidence_support_rate == 0.0
 
 
 def test_agent_fails_closed_for_unsupported_verification_strategy(db_session):
