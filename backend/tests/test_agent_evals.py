@@ -44,6 +44,13 @@ def test_compute_eval_metrics_ignores_duplicate_included_predictions():
     assert metrics["recall"] == 1.0
 
 
+def test_compute_eval_metrics_clamps_negative_failure_counts():
+    metrics = compute_eval_metrics([], schema_failures=-1, verification_failures=-2)
+
+    assert metrics["schema_failure_rate"] == 0.0
+    assert metrics["verification_failure_rate"] == 0.0
+
+
 def test_agent_eval_run_endpoint_persists_metrics(client, db_session):
     calls = {"count": 0}
 
@@ -93,6 +100,24 @@ def test_agent_eval_run_rejects_negative_failure_counts(client, field):
     }
 
     response = client.post("/api/agent-evals/run", json=payload)
+
+    assert response.status_code == 422
+
+
+def test_agent_eval_run_rejects_invalid_decision(client):
+    response = client.post(
+        "/api/agent-evals/run",
+        json={
+            "cases": [
+                {
+                    "name": "金额筛选",
+                    "raw_query": "金额大于100万",
+                    "expected": {"included": ["qmd://docs/a.md"], "excluded": [], "uncertain": []},
+                    "actual": [{"document_uri": "qmd://docs/a.md", "decision": "maybe", "evidence_support_rate": 1.0, "verification_status": "deep_read_verified"}],
+                }
+            ]
+        },
+    )
 
     assert response.status_code == 422
 

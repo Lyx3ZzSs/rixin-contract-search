@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.api.auth import AuthContext, get_auth
 from app.db import get_session
-from app.enums import AuditEventType
+from app.enums import AuditEventType, ResultDecision, VerificationStatus
 from app.errors import ApiError
 from app.models import AgentEvalRun
 from app.services.audit import write_audit
@@ -21,9 +21,9 @@ router = APIRouter()
 
 class AgentEvalPrediction(BaseModel):
     document_uri: str
-    decision: str
+    decision: ResultDecision
     evidence_support_rate: float = Field(ge=0.0, le=1.0)
-    verification_status: str | None = None
+    verification_status: VerificationStatus | None = None
 
 
 class AgentEvalExpected(BaseModel):
