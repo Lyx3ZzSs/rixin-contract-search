@@ -8,6 +8,10 @@ function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
 }
 
+function errorJsonResponse(body: unknown, status = 500): Response {
+  return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+}
+
 function streamResponse(frames: string[]): Response {
   const encoder = new TextEncoder();
   return new Response(
@@ -450,6 +454,38 @@ describe('TaskProgressPage', () => {
     const matrix = await screen.findByRole('table', { name: '条件矩阵' });
     expect(within(matrix).getByRole('button', { name: '采购合同' })).toBeInTheDocument();
     expect(within(matrix).getByRole('button', { name: '补充协议' })).toBeInTheDocument();
+  });
+
+  it('shows a visible error when final results fail after completion', async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/screening-tasks/task-1') return Promise.resolve(jsonResponse(runningSummary));
+      if (url === '/api/screening-tasks/task-1/events') {
+        return Promise.resolve(
+          streamResponse([
+            'id: task-1:1\nevent: task_completed\ndata: {"event_id":"task-1:1","type":"task_completed","task_id":"task-1","timestamp":"2026-06-22T00:00:01Z","payload":{"included_count":1}}\n\n'
+          ])
+        );
+      }
+      if (url === '/api/screening-tasks/task-1/results') {
+        return Promise.resolve(errorJsonResponse({ error: { message: '结果加载失败' } }));
+      }
+      if (url === '/api/screening-tasks/task-1/condition-verdicts') return Promise.resolve(jsonResponse(verdicts));
+      if (url === '/api/screening-tasks/task-1/evidence-ledger') return Promise.resolve(jsonResponse(evidenceLedger));
+      return Promise.reject(new Error(`Unexpected URL ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <MemoryRouter initialEntries={['/tasks/task-1']}>
+        <Routes>
+          <Route path="/tasks/:taskId" element={<TaskProgressPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    await waitFor(() => expect(screen.getByText('结果加载失败')).toBeInTheDocument());
+    expect(screen.getByText('任务进度')).toBeInTheDocument();
   });
 
   it('shows legacy ledger rows that only match through artifact refs', async () => {

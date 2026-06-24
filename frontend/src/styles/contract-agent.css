@@ -596,9 +596,16 @@ h1 {
   text-align: left;
 }
 
+.matrix-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
 .matrix-table {
   display: grid;
   gap: 8px;
+  min-width: 100%;
+  width: max-content;
 }
 
 .matrix-row {
@@ -606,6 +613,8 @@ h1 {
   gap: 8px;
   align-items: stretch;
   grid-template-columns: var(--matrix-columns);
+  min-width: 100%;
+  width: max-content;
 }
 
 .matrix-head {

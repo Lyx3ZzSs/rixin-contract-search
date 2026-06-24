@@ -134,7 +134,7 @@ export function TaskProgressPage() {
   async function loadFinal(id: string, isCancelled: () => boolean) {
     setPhase3Loading(true);
     try {
-      const [nextSummary, nextResults, verdictResult, ledgerResult] = await Promise.all([
+      const [summaryResult, resultsResult, verdictResult, ledgerResult] = await Promise.allSettled([
         getTaskSummary(id),
         getTaskResults(id),
         getConditionVerdicts(id)
@@ -145,14 +145,44 @@ export function TaskProgressPage() {
           .catch((err) => ({ items: [] as LedgerEvidenceItem[], warning: apiErrorMessage(err, '证据账本加载失败') }))
       ]);
       if (isCancelled()) return;
-      setSummary(nextSummary);
-      setResults(normalizeTaskResults(nextResults));
-      setVerdicts(verdictResult.items);
-      setLedger(ledgerResult.items);
-      setMatrixWarning(verdictResult.warning);
-      setLedgerWarning(ledgerResult.warning);
-      const first = flattenResults(nextResults)[0];
-      setSelectedUri((current) => current || first?.document_uri || null);
+
+      if (summaryResult.status === 'fulfilled') {
+        setSummary(summaryResult.value);
+      }
+      if (resultsResult.status === 'fulfilled') {
+        const nextResults = resultsResult.value;
+        setResults(normalizeTaskResults(nextResults));
+        const first = flattenResults(nextResults)[0];
+        setSelectedUri((current) => current || first?.document_uri || null);
+      }
+
+      if (verdictResult.status === 'fulfilled') {
+        setVerdicts(verdictResult.value.items);
+        setMatrixWarning(verdictResult.value.warning);
+      } else {
+        setVerdicts([]);
+        setMatrixWarning(apiErrorMessage(verdictResult.reason, '条件矩阵加载失败'));
+      }
+
+      if (ledgerResult.status === 'fulfilled') {
+        setLedger(ledgerResult.value.items);
+        setLedgerWarning(ledgerResult.value.warning);
+      } else {
+        setLedger([]);
+        setLedgerWarning(apiErrorMessage(ledgerResult.reason, '证据账本加载失败'));
+      }
+
+      const coreFailure =
+        summaryResult.status === 'rejected'
+          ? summaryResult.reason
+          : resultsResult.status === 'rejected'
+            ? resultsResult.reason
+            : null;
+      if (coreFailure) {
+        setError(apiErrorMessage(coreFailure, '加载任务结果失败'));
+      } else {
+        setError(null);
+      }
     } finally {
       if (!isCancelled()) setPhase3Loading(false);
     }
@@ -532,51 +562,51 @@ function ConditionMatrixPanel({
           <span>任务完成后会显示文档与条件的逐项判定。</span>
         </div>
       ) : (
-        <div className="matrix-table" role="table" aria-label="条件矩阵">
-          <div className="matrix-row matrix-head" role="row" style={matrixStyle}>
-            <span role="columnheader">
-              文档
-            </span>
-            {columns.map((conditionId) => (
-              <span role="columnheader" key={conditionId}>
-                {conditionId}
-              </span>
+        <div className="matrix-table-scroll">
+          <div className="matrix-table" role="table" aria-label="条件矩阵">
+            <div className="matrix-row matrix-head" role="row" style={matrixStyle}>
+              <span role="columnheader">文档</span>
+              {columns.map((conditionId) => (
+                <span role="columnheader" key={conditionId}>
+                  {conditionId}
+                </span>
+              ))}
+            </div>
+            {matrix.rows.map((row) => (
+              <div className={`matrix-row ${row.documentUri === selectedDocumentUri ? 'is-selected' : ''}`} key={row.documentUri} role="row" style={matrixStyle}>
+                <button
+                  aria-current={row.documentUri === selectedDocumentUri ? 'true' : undefined}
+                  className="matrix-document-button"
+                  type="button"
+                  onClick={() => onSelectDocument(row.documentUri)}
+                >
+                  {row.documentTitle || row.documentPath}
+                </button>
+                {columns.map((conditionId) => {
+                  const item = row.items.get(conditionId);
+                  return (
+                    <button
+                      className={`verdict-pill verdict-${item?.verdict || 'missing'}`}
+                      key={`${row.documentUri}-${conditionId}`}
+                      type="button"
+                      onClick={() => {
+                        if (!item) return;
+                        const supportingPage = item.supporting_evidence.find((evidence) => evidence.page != null)?.page ?? null;
+                        onPick({
+                          documentUri: row.documentUri,
+                          conditionId,
+                          page: supportingPage
+                        });
+                      }}
+                      disabled={!item}
+                    >
+                      {item ? verdictLabel(item.verdict) : '—'}
+                    </button>
+                  );
+                })}
+              </div>
             ))}
           </div>
-          {matrix.rows.map((row) => (
-            <div className={`matrix-row ${row.documentUri === selectedDocumentUri ? 'is-selected' : ''}`} key={row.documentUri} role="row" style={matrixStyle}>
-              <button
-                aria-current={row.documentUri === selectedDocumentUri ? 'true' : undefined}
-                className="matrix-document-button"
-                type="button"
-                onClick={() => onSelectDocument(row.documentUri)}
-              >
-                {row.documentTitle || row.documentPath}
-              </button>
-              {columns.map((conditionId) => {
-                const item = row.items.get(conditionId);
-                return (
-                  <button
-                    className={`verdict-pill verdict-${item?.verdict || 'missing'}`}
-                    key={`${row.documentUri}-${conditionId}`}
-                    type="button"
-                    onClick={() => {
-                      if (!item) return;
-                      const supportingPage = item.supporting_evidence.find((evidence) => evidence.page != null)?.page ?? null;
-                      onPick({
-                        documentUri: row.documentUri,
-                        conditionId,
-                        page: supportingPage
-                      });
-                    }}
-                    disabled={!item}
-                  >
-                    {item ? verdictLabel(item.verdict) : '—'}
-                  </button>
-                );
-              })}
-            </div>
-          ))}
         </div>
       )}
     </section>
