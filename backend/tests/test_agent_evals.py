@@ -1,7 +1,9 @@
 import pytest
 
 from app.api.auth import AuthContext, get_auth
+from app.enums import AuditEventType
 from app.main import app
+from app.models import AgentEvalCase, AgentEvalRun, AuditEvent
 from app.services.evals import compute_eval_metrics
 
 
@@ -51,7 +53,8 @@ def test_compute_eval_metrics_clamps_negative_failure_counts():
     assert metrics["verification_failure_rate"] == 0.0
 
 
-def test_agent_eval_run_endpoint_persists_metrics(client, db_session):
+def test_agent_eval_run_endpoint_persists_metrics_and_cases(client, db_session):
+    session, _ = db_session
     calls = {"count": 0}
 
     def override_auth():
@@ -59,30 +62,87 @@ def test_agent_eval_run_endpoint_persists_metrics(client, db_session):
         return AuthContext(owner_id="test-owner")
 
     app.dependency_overrides[get_auth] = override_auth
-    response = client.post(
-        "/api/agent-evals/run",
-        json={
-            "cases": [
-                {
-                    "name": "金额筛选",
-                    "raw_query": "金额大于100万",
-                    "expected": {"included": ["qmd://docs/a.md"], "excluded": [], "uncertain": []},
-                    "actual": [{"document_uri": "qmd://docs/a.md", "decision": "included", "evidence_support_rate": 1.0, "verification_status": "deep_read_verified"}],
-                }
-            ]
-        },
-    )
+    try:
+        response = client.post(
+            "/api/agent-evals/run",
+            json={
+                "cases": [
+                    {
+                        "name": "金额筛选",
+                        "raw_query": "金额大于100万",
+                        "expected": {"included": ["qmd://docs/a.md"], "excluded": [], "uncertain": []},
+                        "actual": [{"document_uri": "qmd://docs/a.md", "decision": "included", "evidence_support_rate": 1.0, "verification_status": "deep_read_verified"}],
+                    }
+                ]
+            },
+        )
 
-    assert response.status_code == 200
-    body = response.json()
-    assert body["metrics"]["precision"] == 1.0
-    assert body["metrics"]["recall"] == 1.0
+        assert response.status_code == 200
+        body = response.json()
+        assert body["metrics"]["precision"] == 1.0
+        assert body["metrics"]["recall"] == 1.0
+        assert body["case_ids"]
 
-    calls["count"] = 0
-    get_response = client.get(f"/api/agent-evals/{body['run_id']}")
+        run = session.get(AgentEvalRun, body["run_id"])
+        assert run is not None
+        assert run.case_ids == body["case_ids"]
+        assert len(run.case_ids) == 1
 
-    assert get_response.status_code == 200
-    assert calls["count"] == 1
+        stored_case_id = run.case_ids[0]
+        stored_case = session.get(AgentEvalCase, stored_case_id)
+        assert stored_case is not None
+        assert stored_case.name == "金额筛选"
+        assert stored_case.raw_query == "金额大于100万"
+        assert stored_case.expected["expected"]["included"] == ["qmd://docs/a.md"]
+        assert stored_case.expected["actual"][0]["decision"] == "included"
+
+        audit = session.query(AuditEvent).filter_by(event_type=AuditEventType.agent_eval_run.value).one()
+        assert audit.actor_id == "test-owner"
+        assert audit.payload["run_id"] == body["run_id"]
+
+        calls["count"] = 0
+        get_response = client.get(f"/api/agent-evals/{body['run_id']}")
+
+        assert get_response.status_code == 200
+        assert calls["count"] == 1
+    finally:
+        app.dependency_overrides.pop(get_auth, None)
+
+
+def test_agent_eval_run_get_is_scoped_to_run_creator(client, db_session):
+    session, _ = db_session
+
+    def owner_override():
+        return AuthContext(owner_id="owner-a")
+
+    app.dependency_overrides[get_auth] = owner_override
+    try:
+        response = client.post(
+            "/api/agent-evals/run",
+            json={
+                "cases": [
+                    {
+                        "name": "金额筛选",
+                        "raw_query": "金额大于100万",
+                        "expected": {"included": ["qmd://docs/a.md"], "excluded": [], "uncertain": []},
+                        "actual": [{"document_uri": "qmd://docs/a.md", "decision": "included", "evidence_support_rate": 1.0, "verification_status": "deep_read_verified"}],
+                    }
+                ]
+            },
+        )
+        assert response.status_code == 200
+        run_id = response.json()["run_id"]
+    finally:
+        app.dependency_overrides.pop(get_auth, None)
+
+    app.dependency_overrides[get_auth] = lambda: AuthContext(owner_id="owner-b")
+    try:
+        scoped_response = client.get(f"/api/agent-evals/{run_id}")
+    finally:
+        app.dependency_overrides.pop(get_auth, None)
+
+    assert scoped_response.status_code == 404
+    assert scoped_response.json()["error"]["code"] == "not_found"
 
 
 @pytest.mark.parametrize("field", ["schema_failures", "verification_failures"])
