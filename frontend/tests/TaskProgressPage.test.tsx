@@ -163,6 +163,44 @@ const evidenceLedger = {
   ]
 };
 
+const legacyArtifactLedger = {
+  task_id: 'task-1',
+  items: [
+    {
+      page: 1,
+      text: '合同总价为人民币120万元',
+      source: 'qmd',
+      score: 0.88,
+      condition_id: 'general_match',
+      artifact_ref: 'qmd://company_docs/contracts/purchase.md',
+      role: 'supporting',
+      source_tool: 'doc_read',
+      document_uri: 'qmd://company_docs/contracts/purchase.md',
+      document_path: 'contracts/purchase.md',
+      collection: 'company_docs',
+      anchor: '总价',
+      context: '原文片段',
+      used_for_decision: true
+    },
+    {
+      page: 2,
+      text: '旧版账本只保留了 artifact_ref',
+      source: 'qmd',
+      score: 0.54,
+      condition_id: 'artifact_ref_only',
+      artifact_ref: 'qmd://company_docs/contracts/purchase.md',
+      role: 'supporting',
+      source_tool: 'doc_read',
+      document_uri: null,
+      document_path: null,
+      collection: 'company_docs',
+      anchor: '旧版条目',
+      context: '旧版上下文',
+      used_for_decision: false
+    }
+  ]
+};
+
 const multiDocumentResults = {
   ...results,
   buckets: {
@@ -409,6 +447,95 @@ describe('TaskProgressPage', () => {
     const matrix = await screen.findByRole('table', { name: '条件矩阵' });
     expect(within(matrix).getByRole('button', { name: '采购合同' })).toBeInTheDocument();
     expect(within(matrix).getByRole('button', { name: '补充协议' })).toBeInTheDocument();
+  });
+
+  it('shows legacy ledger rows that only match through artifact refs', async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/screening-tasks/task-1') return Promise.resolve(jsonResponse(completedSummary));
+      if (url === '/api/screening-tasks/task-1/events') return Promise.resolve(streamResponse([]));
+      if (url === '/api/screening-tasks/task-1/results') return Promise.resolve(jsonResponse(results));
+      if (url === '/api/screening-tasks/task-1/condition-verdicts') return Promise.resolve(jsonResponse(verdicts));
+      if (url === '/api/screening-tasks/task-1/evidence-ledger') return Promise.resolve(jsonResponse(legacyArtifactLedger));
+      return Promise.reject(new Error(`Unexpected URL ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <MemoryRouter initialEntries={['/tasks/task-1']}>
+        <Routes>
+          <Route path="/tasks/:taskId" element={<TaskProgressPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    await waitFor(() => expect(screen.getByText('artifact_ref_only')).toBeInTheDocument());
+  });
+
+  it('reloads qmd context using the current condition and page target', async () => {
+    const user = userEvent.setup();
+    let contextCalls = 0;
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/screening-tasks/task-1') return Promise.resolve(jsonResponse(completedSummary));
+      if (url === '/api/screening-tasks/task-1/events') return Promise.resolve(streamResponse([]));
+      if (url === '/api/screening-tasks/task-1/results') return Promise.resolve(jsonResponse(results));
+      if (url === '/api/screening-tasks/task-1/condition-verdicts') return Promise.resolve(jsonResponse(verdicts));
+      if (url === '/api/screening-tasks/task-1/evidence-ledger') return Promise.resolve(jsonResponse(evidenceLedger));
+      if (url.startsWith('/api/qmd-documents/preview')) {
+        return Promise.resolve(
+          jsonResponse({
+            document_uri: 'qmd://company_docs/contracts/purchase.md',
+            document_title: '采购合同',
+            collection: 'company_docs',
+            toc: [],
+            summary: '原文预览摘要',
+            can_open: true,
+            can_download: true
+          })
+        );
+      }
+      if (url.startsWith('/api/qmd-documents/evidence-context')) {
+        contextCalls += 1;
+        return Promise.resolve(
+          jsonResponse({
+            document_uri: 'qmd://company_docs/contracts/purchase.md',
+            condition_id: 'general_match',
+            page: 1,
+            anchor: '总价',
+            text: '合同总价为人民币120万元',
+            source_tool: 'doc_read'
+          })
+        );
+      }
+      return Promise.reject(new Error(`Unexpected URL ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <MemoryRouter initialEntries={['/tasks/task-1']}>
+        <Routes>
+          <Route path="/tasks/:taskId" element={<TaskProgressPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    const matrix = await screen.findByRole('table', { name: '条件矩阵' });
+    await user.click(within(matrix).getByRole('button', { name: '满足' }));
+
+    await waitFor(() => expect(screen.getByText('条件：general_match')).toBeInTheDocument());
+    const evidenceContextUrls = () =>
+      fetchMock.mock.calls.map(([input]) => String(input)).filter((url) => url.includes('/api/qmd-documents/evidence-context'));
+    expect(evidenceContextUrls()).toHaveLength(1);
+    expect(evidenceContextUrls()[0]).toContain('condition_id=general_match');
+    expect(evidenceContextUrls()[0]).toContain('page=1');
+
+    await user.click(screen.getByRole('button', { name: '重新加载' }));
+
+    await waitFor(() => expect(evidenceContextUrls()).toHaveLength(2));
+    expect(evidenceContextUrls()[1]).toContain('condition_id=general_match');
+    expect(evidenceContextUrls()[1]).toContain('page=1');
+    expect(contextCalls).toBe(2);
   });
 
   it('saves a manual review and updates the selected result', async () => {

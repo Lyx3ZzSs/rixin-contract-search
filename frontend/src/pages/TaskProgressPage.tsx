@@ -168,7 +168,7 @@ export function TaskProgressPage() {
   const visibleLedger = useMemo(() => {
     if (!ledger.length) return [];
     if (!selectedDocument) return ledger;
-    return ledger.filter((item) => item.document_uri === selectedDocument.document_uri);
+    return ledger.filter((item) => resolveEvidenceDocumentUri(item, selectedDocument) === selectedDocument.document_uri);
   }, [ledger, selectedDocument]);
   const selectedDocumentUri = selectedDocument?.document_uri || null;
   const isCompleted = visibleSummary?.status === 'completed';
@@ -338,6 +338,7 @@ export function TaskProgressPage() {
             preview={previewMeta}
             context={previewContext}
             error={previewError}
+            previewTarget={previewTarget}
             onPreview={(target) => {
               setSelectedUri(target.documentUri);
               setPreviewTarget(target);
@@ -636,6 +637,7 @@ function QmdContextPanel({
   preview,
   context,
   error,
+  previewTarget,
   onPreview,
   taskId
 }: {
@@ -644,6 +646,7 @@ function QmdContextPanel({
   preview: QmdDocumentPreview | null;
   context: QmdEvidenceContext | null;
   error: string | null;
+  previewTarget: PreviewTarget | null;
   onPreview: (target: PreviewTarget) => void;
   taskId: string;
 }) {
@@ -653,6 +656,7 @@ function QmdContextPanel({
   const conditionLabel = context?.condition_id ? `条件：${context.condition_id}` : '条件：-';
   const pageLabel = context && context.page != null ? `页码：${context.page}` : '页码：-';
   const anchorLabel = context?.anchor || '锚点：-';
+  const reloadTarget = previewTarget || { documentUri: documentUri || '', conditionId: null, page: null };
 
   return (
     <section className="phase3-panel">
@@ -685,13 +689,7 @@ function QmdContextPanel({
               <button
                 className="ghost-button"
                 type="button"
-                onClick={() =>
-                  onPreview({
-                    documentUri: documentUri || '',
-                    conditionId: null,
-                    page: null
-                  })
-                }
+                onClick={() => onPreview(previewTarget ? { ...previewTarget } : reloadTarget)}
                 disabled={!documentUri}
               >
                 {preview || context ? '重新加载' : '加载上下文'}
