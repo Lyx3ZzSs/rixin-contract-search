@@ -4,7 +4,20 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.enums import ParseStatus, ResultDecision, ReviewStatus, TaskStatus
+from app.enums import (
+    ConditionOperator,
+    ConditionType,
+    ConditionVerdictValue,
+    EvidenceRole,
+    EvidenceSourceTool,
+    ParseStatus,
+    ResultDecision,
+    ReviewStatus,
+    TaskStatus,
+    UncertainReason,
+    VerificationStatus,
+    VerificationStrategy,
+)
 
 
 class ErrorBody(BaseModel):
@@ -126,6 +139,10 @@ class DocumentResultItem(BaseModel):
     review_note: str | None = None
     reviewer_name: str | None = None
     reviewed_at: datetime | None = None
+    decision_basis: dict[str, Any] = Field(default_factory=dict)
+    uncertain_reasons: list[UncertainReason] = Field(default_factory=list)
+    evidence_support_rate: float = 0.0
+    verification_status: VerificationStatus = VerificationStatus.query_only
     created_at: datetime
     updated_at: datetime
 
@@ -171,18 +188,25 @@ class StreamEventEnvelope(BaseModel):
 class ScreeningCondition(BaseModel):
     id: str
     description: str
-    operator: Literal["semantic_match"]
-    value: str
+    operator: ConditionOperator = ConditionOperator.semantic_match
+    value: str | int | float | bool | dict[str, Any] | list[Any]
     qmd_queries: list[str]
     evidence_required: int = 1
     structured: bool
+    condition_type: ConditionType = ConditionType.semantic_risk
+    normalization_hint: dict[str, Any] = Field(default_factory=dict)
+    verification_strategy: VerificationStrategy = VerificationStrategy.query_only
+    required_evidence_count: int = 1
+    negative_evidence_allowed: bool = False
 
 
 class ScreeningPlanPayload(BaseModel):
     target: Literal["qmd_document"] = "qmd_document"
+    plan_version: int = 1
     conditions: list[ScreeningCondition] = Field(min_length=1)
     decision_policy: Literal[
-        "phase1_keyword_candidate_uncertain_on_structured_comparison"
+        "phase1_keyword_candidate_uncertain_on_structured_comparison",
+        "all_required_conditions_satisfied_else_uncertain_on_missing_or_conflict",
     ] = "phase1_keyword_candidate_uncertain_on_structured_comparison"
 
 
@@ -194,3 +218,66 @@ class ContractScreeningDecision(BaseModel):
     missing_conditions: list[str]
     evidence: list[EvidenceItem]
     confidence: float
+
+
+class LedgerEvidenceItem(EvidenceItem):
+    role: EvidenceRole = EvidenceRole.retrieval_candidate
+    source_tool: EvidenceSourceTool = EvidenceSourceTool.query
+    document_uri: str | None = None
+    document_path: str | None = None
+    collection: str | None = None
+    anchor: str | None = None
+    context: str | None = None
+    used_for_decision: bool = False
+
+
+class ConditionVerdictItem(BaseModel):
+    verdict_id: UUID
+    task_id: UUID
+    document_uri: str
+    condition_id: str
+    verdict: ConditionVerdictValue
+    confidence: float
+    supporting_evidence: list[LedgerEvidenceItem]
+    contradicting_evidence: list[LedgerEvidenceItem]
+    missing_reason: str | None = None
+    verification_method: VerificationStrategy
+    created_at: datetime
+
+
+class ConditionVerdictResponse(BaseModel):
+    task_id: UUID
+    items: list[ConditionVerdictItem]
+
+
+class EvidenceLedgerResponse(BaseModel):
+    task_id: UUID
+    items: list[LedgerEvidenceItem]
+
+
+class QmdDocumentPreviewResponse(BaseModel):
+    document_uri: str
+    document_title: str | None = None
+    collection: str | None = None
+    toc: list[dict[str, Any]] = Field(default_factory=list)
+    summary: str | None = None
+    can_open: bool = False
+    can_download: bool = False
+
+
+class QmdEvidenceContextResponse(BaseModel):
+    document_uri: str
+    condition_id: str | None = None
+    page: int | None = None
+    anchor: str | None = None
+    text: str
+    source_tool: EvidenceSourceTool
+
+
+class AgentEvalMetrics(BaseModel):
+    precision: float
+    recall: float
+    uncertain_rate: float
+    evidence_support_rate: float
+    schema_failure_rate: float
+    verification_failure_rate: float

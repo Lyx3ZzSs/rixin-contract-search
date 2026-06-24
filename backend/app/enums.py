@@ -32,6 +32,72 @@ class ReviewStatus(StrEnum):
     reviewed = "reviewed"
 
 
+class ConditionVerdictValue(StrEnum):
+    satisfied = "satisfied"
+    not_satisfied = "not_satisfied"
+    unknown = "unknown"
+    conflicting = "conflicting"
+
+
+class ConditionType(StrEnum):
+    amount = "amount"
+    date = "date"
+    party = "party"
+    clause_presence = "clause_presence"
+    clause_absence = "clause_absence"
+    semantic_risk = "semantic_risk"
+    keyword = "keyword"
+
+
+class ConditionOperator(StrEnum):
+    semantic_match = "semantic_match"
+    gte = "gte"
+    lte = "lte"
+    eq = "eq"
+    contains = "contains"
+    not_contains = "not_contains"
+    before = "before"
+    after = "after"
+
+
+class VerificationStrategy(StrEnum):
+    query_only = "query_only"
+    grep_then_read = "grep_then_read"
+    doc_query = "doc_query"
+    toc_guided_read = "toc_guided_read"
+
+
+class VerificationStatus(StrEnum):
+    query_only = "query_only"
+    deep_read_verified = "deep_read_verified"
+    partially_verified = "partially_verified"
+    verification_failed = "verification_failed"
+
+
+class UncertainReason(StrEnum):
+    missing_evidence = "missing_evidence"
+    conflicting_evidence = "conflicting_evidence"
+    low_retrieval_confidence = "low_retrieval_confidence"
+    ambiguous_requirement = "ambiguous_requirement"
+    model_validation_failed = "model_validation_failed"
+    verification_failed = "verification_failed"
+
+
+class EvidenceRole(StrEnum):
+    retrieval_candidate = "retrieval_candidate"
+    supporting = "supporting"
+    contradicting = "contradicting"
+    missing_context = "missing_context"
+
+
+class EvidenceSourceTool(StrEnum):
+    query = "query"
+    doc_grep = "doc_grep"
+    doc_read = "doc_read"
+    doc_query = "doc_query"
+    doc_elements = "doc_elements"
+
+
 class WorkerMode(StrEnum):
     simple = "simple"
     fork = "fork"
@@ -56,6 +122,10 @@ class AuditEventType(StrEnum):
     qmd_mapping_failed = "qmd_mapping_failed"
     classification_completed = "classification_completed"
     result_reviewed = "result_reviewed"
+    document_previewed = "document_previewed"
+    document_opened = "document_opened"
+    document_downloaded = "document_downloaded"
+    agent_eval_run = "agent_eval_run"
     download = "download"
     permission_denied = "permission_denied"
     task_failed = "task_failed"
