@@ -313,8 +313,10 @@ def parse_status_collections(text: str) -> list[dict[str, Any]]:
 
 
 def validate_qmd_document_uri(document_uri: str) -> str:
-    value = document_uri.strip()
-    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
+    value = document_uri
+    if value != value.strip():
+        raise QmdUnavailable("qmd document URI contains surrounding whitespace")
+    if contains_control_character(value):
         raise QmdUnavailable("qmd document URI contains an unsafe control character")
     try:
         parsed = urlsplit(value)
@@ -330,9 +332,8 @@ def validate_qmd_document_uri(document_uri: str) -> str:
         raise QmdUnavailable("qmd document URI must not include query or fragment")
     decoded_collection = strict_percent_decode(parsed.netloc)
     if (
-        "\x00" in value
-        or decoded_collection in {".", ".."}
-        or "\x00" in decoded_collection
+        decoded_collection in {".", ".."}
+        or contains_control_character(decoded_collection)
         or "/" in decoded_collection
         or "\\" in decoded_collection
         or "@" in decoded_collection
@@ -345,12 +346,16 @@ def validate_qmd_document_uri(document_uri: str) -> str:
         decoded = strict_percent_decode(segment)
         if (
             decoded in {"", ".", ".."}
-            or "\x00" in decoded
+            or contains_control_character(decoded)
             or "/" in decoded
             or "\\" in decoded
         ):
             raise QmdUnavailable("qmd document URI contains an unsafe path segment")
     return value
+
+
+def contains_control_character(value: str) -> bool:
+    return any(ord(char) < 0x20 or ord(char) == 0x7F for char in value)
 
 
 def clean_optional_string(value: Any) -> str | None:
@@ -376,7 +381,10 @@ def strict_percent_decode(value: str) -> str:
 
 
 def normalize_qmd_file(file_value: str, fallback_collection: str) -> tuple[str, str, str]:
-    value = file_value.strip()
+    raw_value = file_value
+    value = raw_value.strip()
+    if raw_value != value and value.startswith("qmd://"):
+        validate_qmd_document_uri(raw_value)
     if value.startswith("qmd://"):
         validate_qmd_document_uri(value)
         without_scheme = value[len("qmd://") :]

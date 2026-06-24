@@ -80,6 +80,15 @@ def test_normalize_qmd_file_rejects_path_escape():
         "qmd://company\t_docs/contracts/a.md",
         "qmd://company_docs/contracts/a\r.md",
         "qmd://company_docs/contracts/a\x7f.md",
+        "\nqmd://company_docs/contracts/a.md",
+        "qmd://company%0adocs/contracts/a.md",
+        "qmd://company%09docs/contracts/a.md",
+        "qmd://company%1fdocs/contracts/a.md",
+        "qmd://company_docs/contracts/a%0a.md",
+        "qmd://company_docs/contracts/a%0d.md",
+        "qmd://company_docs/contracts/a%09.md",
+        "qmd://company_docs/contracts/a%1f.md",
+        "qmd://company_docs/contracts/a%7f.md",
     ],
 )
 def test_normalize_qmd_file_rejects_unsafe_decoded_uri_segments(document_uri):
