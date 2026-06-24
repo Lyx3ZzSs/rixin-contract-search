@@ -154,6 +154,9 @@ class QmdClient:
         structured = payload.get("structuredContent")
         if isinstance(structured, dict):
             toc = structured.get("toc")
+            document_title = clean_optional_string(structured.get("title"))
+            collection = clean_optional_string(structured.get("collection"))
+            summary = clean_optional_string(structured.get("summary"))
             open_url = structured.get("open_url")
             download_url = structured.get("download_url")
             open_url = open_url.strip() if isinstance(open_url, str) else None
@@ -162,10 +165,10 @@ class QmdClient:
             download_url = download_url or None
             return {
                 "document_uri": safe_uri,
-                "document_title": structured.get("title"),
-                "collection": structured.get("collection"),
+                "document_title": document_title,
+                "collection": collection,
                 "toc": toc if isinstance(toc, list) else [],
-                "summary": structured.get("summary"),
+                "summary": summary,
                 "can_open": open_url is not None,
                 "can_download": download_url is not None,
                 "open_url": open_url,
@@ -311,6 +314,8 @@ def parse_status_collections(text: str) -> list[dict[str, Any]]:
 
 def validate_qmd_document_uri(document_uri: str) -> str:
     value = document_uri.strip()
+    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
+        raise QmdUnavailable("qmd document URI contains an unsafe control character")
     try:
         parsed = urlsplit(value)
     except ValueError as exc:
@@ -346,6 +351,13 @@ def validate_qmd_document_uri(document_uri: str) -> str:
         ):
             raise QmdUnavailable("qmd document URI contains an unsafe path segment")
     return value
+
+
+def clean_optional_string(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value or None
 
 
 def strict_percent_decode(value: str) -> str:

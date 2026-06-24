@@ -76,6 +76,10 @@ def test_normalize_qmd_file_rejects_path_escape():
         "qmd://company_docs/contracts/a.md#frag",
         "qmd://user@company_docs/contracts/a.md",
         "qmd://company_docs:bad/contracts/a.md",
+        "qmd://company_docs/contracts/a\n.md",
+        "qmd://company\t_docs/contracts/a.md",
+        "qmd://company_docs/contracts/a\r.md",
+        "qmd://company_docs/contracts/a\x7f.md",
     ],
 )
 def test_normalize_qmd_file_rejects_unsafe_decoded_uri_segments(document_uri):
@@ -221,6 +225,28 @@ def test_document_preview_ignores_non_string_urls(monkeypatch):
     assert preview["can_download"] is False
     assert preview["open_url"] is None
     assert preview["download_url"] is None
+
+
+def test_document_preview_ignores_non_string_metadata(monkeypatch):
+    client = QmdClient(url="http://qmd.example/mcp")
+
+    def fake_call_tool(name, arguments):
+        assert name == "doc_toc"
+        return {
+            "structuredContent": {
+                "title": ["A采购合同"],
+                "collection": {"name": "company_docs"},
+                "summary": ["合同摘要"],
+            }
+        }
+
+    monkeypatch.setattr(client, "_call_tool", fake_call_tool)
+
+    preview = client.document_preview("qmd://company_docs/contracts/a.md")
+
+    assert preview["document_title"] is None
+    assert preview["collection"] is None
+    assert preview["summary"] is None
 
 
 def test_document_preview_ignores_blank_string_urls(monkeypatch):
