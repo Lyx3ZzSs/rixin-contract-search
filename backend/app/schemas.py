@@ -206,9 +206,12 @@ class ScreeningCondition(BaseModel):
             return data
 
         data = dict(data)
-        if "required_evidence_count" in data and "evidence_required" not in data:
+        if "required_evidence_count" in data and "evidence_required" in data:
+            if data["required_evidence_count"] != data["evidence_required"]:
+                raise ValueError("evidence_required and required_evidence_count must match")
+        elif "required_evidence_count" in data:
             data["evidence_required"] = data["required_evidence_count"]
-        elif "evidence_required" in data and "required_evidence_count" not in data:
+        elif "evidence_required" in data:
             data["required_evidence_count"] = data["evidence_required"]
         return data
 
@@ -256,7 +259,7 @@ class ConditionVerdictItem(BaseModel):
     document_uri: str
     condition_id: str
     verdict: ConditionVerdictValue
-    confidence: float
+    confidence: float = Field(ge=0.0, le=1.0)
     supporting_evidence: list[LedgerEvidenceItem]
     contradicting_evidence: list[LedgerEvidenceItem]
     missing_reason: str | None = None

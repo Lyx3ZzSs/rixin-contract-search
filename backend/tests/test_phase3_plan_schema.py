@@ -5,7 +5,13 @@ import pytest
 from pydantic import ValidationError
 
 from app.enums import ConditionVerdictValue, EvidenceRole, ResultDecision, VerificationStatus
-from app.schemas import AgentEvalMetrics, DocumentResultItem, ScreeningCondition, ScreeningPlanPayload
+from app.schemas import (
+    AgentEvalMetrics,
+    ConditionVerdictItem,
+    DocumentResultItem,
+    ScreeningCondition,
+    ScreeningPlanPayload,
+)
 
 
 def test_screening_plan_v2_accepts_structured_amount_condition():
@@ -127,6 +133,22 @@ def test_screening_condition_rejects_non_positive_evidence_counts(field_name, va
         ScreeningCondition.model_validate(payload)
 
 
+def test_screening_condition_rejects_conflicting_evidence_count_aliases():
+    with pytest.raises(ValidationError):
+        ScreeningCondition.model_validate(
+            {
+                "id": "general_match",
+                "description": "包含验收付款条款",
+                "operator": "semantic_match",
+                "value": "验收付款条款",
+                "qmd_queries": ["验收付款"],
+                "evidence_required": 2,
+                "required_evidence_count": 3,
+                "structured": False,
+            }
+        )
+
+
 def test_screening_plan_rejects_unsupported_plan_version():
     with pytest.raises(ValidationError):
         ScreeningPlanPayload.model_validate(
@@ -170,7 +192,8 @@ def test_screening_plan_rejects_non_integer_plan_versions(plan_version):
         )
 
 
-def test_phase3_rate_fields_are_bounded():
+@pytest.mark.parametrize("evidence_support_rate", [-0.1, 1.1])
+def test_document_result_evidence_support_rate_is_bounded(evidence_support_rate):
     now = datetime.now()
 
     with pytest.raises(ValidationError):
@@ -185,19 +208,53 @@ def test_phase3_rate_fields_are_bounded():
             missing_conditions=["amount_threshold"],
             evidence=[],
             confidence=0.5,
-            evidence_support_rate=1.1,
+            evidence_support_rate=evidence_support_rate,
             created_at=now,
             updated_at=now,
         )
 
+
+@pytest.mark.parametrize(
+    "field_name",
+    [
+        "precision",
+        "recall",
+        "uncertain_rate",
+        "evidence_support_rate",
+        "schema_failure_rate",
+        "verification_failure_rate",
+    ],
+)
+@pytest.mark.parametrize("value", [-0.1, 1.1])
+def test_agent_eval_metric_rate_fields_are_bounded(field_name, value):
+    payload = {
+        "precision": 0.9,
+        "recall": 0.8,
+        "uncertain_rate": 0.1,
+        "evidence_support_rate": 0.7,
+        "schema_failure_rate": 0.0,
+        "verification_failure_rate": 0.2,
+        field_name: value,
+    }
+
     with pytest.raises(ValidationError):
-        AgentEvalMetrics(
-            precision=0.9,
-            recall=0.8,
-            uncertain_rate=-0.1,
-            evidence_support_rate=0.7,
-            schema_failure_rate=0.0,
-            verification_failure_rate=0.2,
+        AgentEvalMetrics.model_validate(payload)
+
+
+@pytest.mark.parametrize("confidence", [-0.1, 1.1])
+def test_condition_verdict_confidence_is_bounded(confidence):
+    with pytest.raises(ValidationError):
+        ConditionVerdictItem(
+            verdict_id=uuid4(),
+            task_id=uuid4(),
+            document_uri="qmd://doc/1",
+            condition_id="amount_threshold",
+            verdict=ConditionVerdictValue.unknown,
+            confidence=confidence,
+            supporting_evidence=[],
+            contradicting_evidence=[],
+            verification_method="query_only",
+            created_at=datetime.now(),
         )
 
 
