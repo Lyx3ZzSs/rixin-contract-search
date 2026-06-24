@@ -123,7 +123,7 @@ def _normalize_raw_verdict(
         fallback_evidence,
         allow_fallback_when_unmatched=verdict == ConditionVerdictValue.satisfied.value,
     )
-    contradicting = _normalize_evidence_list(raw.get("contradicting_evidence"), [])
+    contradicting = _normalize_evidence_list(raw.get("contradicting_evidence"), fallback_evidence)
     missing_reason = raw.get("missing_reason")
     required_evidence_count = max(1, int(getattr(condition, "required_evidence_count", 1) or getattr(condition, "evidence_required", 1) or 1))
     trusted_supporting_count = len(supporting)

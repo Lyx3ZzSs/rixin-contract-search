@@ -114,6 +114,47 @@ class ForgedEvidenceSatisfiedLlm(VerdictLlm):
         }
 
 
+class ContradictingEvidenceVerdictLlm(VerdictLlm):
+    def __init__(self, verdict: str):
+        self.verdict = verdict
+
+    def judge_condition(self, plan, condition, document, evidence):
+        return {
+            "verdict": self.verdict,
+            "confidence": 0.41,
+            "supporting_evidence": [],
+            "contradicting_evidence": evidence,
+            "missing_reason": None,
+        }
+
+
+class ForgedContradictingEvidenceLlm(VerdictLlm):
+    def judge_condition(self, plan, condition, document, evidence):
+        forged = {
+            "page": 999,
+            "text": "伪造的反证据",
+            "context": "伪造的反证据上下文",
+            "source": "qmd",
+            "score": 0.01,
+            "condition_id": condition.id,
+            "artifact_ref": "qmd://fake/contracts/forged-contradiction.md",
+            "document_uri": "qmd://fake/contracts/forged-contradiction.md",
+            "role": "contradicting",
+            "source_tool": "manual_upload",
+            "document_path": "/tmp/forged-contradiction.md",
+            "collection": "fake_collection",
+            "anchor": "fake-anchor",
+            "used_for_decision": True,
+        }
+        return {
+            "verdict": "conflicting",
+            "confidence": 0.41,
+            "supporting_evidence": [],
+            "contradicting_evidence": [forged],
+            "missing_reason": None,
+        }
+
+
 class StrictCountVerdictLlm(VerdictLlm):
     def plan(self, raw_query: str):
         return ScreeningPlanPayload(
@@ -328,6 +369,68 @@ def test_agent_ignores_forged_llm_evidence_and_keeps_gathered_provenance(db_sess
     assert verdict.supporting_evidence[0]["text"] == "第三页：合同总价为人民币120万元，含税。"
     assert verdict.supporting_evidence[0]["artifact_ref"] == "qmd://company_docs/contracts/a.md"
     assert verdict.supporting_evidence[0]["source_tool"] != "manual_upload"
+
+
+def test_agent_preserves_matching_contradicting_evidence_and_rejects_forged_contradictions(db_session):
+    from app.services.agent.langgraph_agent import ContractScreeningAgent
+
+    for verdict_value, expected_decision, expected_reason, expected_uncertain_reason in [
+        ("conflicting", ResultDecision.uncertain.value, "condition_missing_or_conflicting", UncertainReason.conflicting_evidence.value),
+        ("not_satisfied", ResultDecision.excluded.value, "condition_not_satisfied", None),
+    ]:
+        session, _ = db_session
+        task = ScreeningTask(
+            id=uuid4(),
+            owner_id="internal-user",
+            title="金额筛选",
+            raw_query="筛选合同总价大于等于100万元的合同",
+            status=TaskStatus.retrieving.value,
+            current_stage=TaskStatus.retrieving.value,
+            progress_percent=10,
+            metrics={},
+        )
+        session.add(task)
+        session.commit()
+
+        ContractScreeningAgent(llm=ContradictingEvidenceVerdictLlm(verdict_value), qmd=DeepReadQmd(), collections=["company_docs"], top_k=5, max_retrieval_rounds=1).run(session, task)
+
+        verdict = session.scalars(select(ConditionVerdict).where(ConditionVerdict.task_id == task.id)).one()
+        assert verdict.verdict == verdict_value
+        assert verdict.contradicting_evidence
+        assert verdict.contradicting_evidence[0]["source_tool"] == "doc_read"
+        assert verdict.contradicting_evidence[0]["artifact_ref"] == "qmd://company_docs/contracts/a.md"
+
+        result = session.scalars(select(ScreeningDocumentResult).where(ScreeningDocumentResult.task_id == task.id)).one()
+        assert result.decision == expected_decision
+        assert result.reason == expected_reason
+        if expected_uncertain_reason is None:
+            assert result.uncertain_reasons == []
+        else:
+            assert expected_uncertain_reason in result.uncertain_reasons
+
+    session, _ = db_session
+    task = ScreeningTask(
+        id=uuid4(),
+        owner_id="internal-user",
+        title="金额筛选",
+        raw_query="筛选合同总价大于等于100万元的合同",
+        status=TaskStatus.retrieving.value,
+        current_stage=TaskStatus.retrieving.value,
+        progress_percent=10,
+        metrics={},
+    )
+    session.add(task)
+    session.commit()
+
+    ContractScreeningAgent(llm=ForgedContradictingEvidenceLlm(), qmd=DeepReadQmd(), collections=["company_docs"], top_k=5, max_retrieval_rounds=1).run(session, task)
+
+    verdict = session.scalars(select(ConditionVerdict).where(ConditionVerdict.task_id == task.id)).one()
+    assert verdict.verdict == ConditionVerdictValue.conflicting.value
+    assert verdict.contradicting_evidence == []
+
+    result = session.scalars(select(ScreeningDocumentResult).where(ScreeningDocumentResult.task_id == task.id)).one()
+    assert result.decision == ResultDecision.uncertain.value
+    assert UncertainReason.conflicting_evidence.value in result.uncertain_reasons
 
 
 def test_agent_requires_minimum_supporting_evidence_count(db_session):
