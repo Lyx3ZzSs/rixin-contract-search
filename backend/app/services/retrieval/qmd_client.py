@@ -1,5 +1,6 @@
 from json import JSONDecodeError
 from typing import Any
+from urllib.parse import unquote, urlsplit
 
 import httpx
 from pydantic import BaseModel, Field
@@ -81,11 +82,20 @@ class QmdClient:
                 "params": {},
             }
         )
-        tools = response.get("result", {}).get("tools", [])
+        result = response.get("result")
+        if not isinstance(result, dict):
+            raise QmdUnavailable("qmd MCP tools/list returned an invalid response")
+        tools = result.get("tools")
+        if not isinstance(tools, list):
+            raise QmdUnavailable("qmd MCP tools/list returned invalid tools")
         return [
-            str(item.get("name"))
+            item.get("name")
             for item in tools
-            if isinstance(item, dict) and item.get("name")
+            if (
+                isinstance(item, dict)
+                and isinstance(item.get("name"), str)
+                and item.get("name")
+            )
         ]
 
     def doc_toc(self, document_uri: str) -> dict[str, Any]:
@@ -291,16 +301,34 @@ def parse_status_collections(text: str) -> list[dict[str, Any]]:
 
 def validate_qmd_document_uri(document_uri: str) -> str:
     value = document_uri.strip()
-    if not value.startswith("qmd://"):
+    parsed = urlsplit(value)
+    if parsed.scheme != "qmd":
         raise QmdUnavailable("qmd document URI must start with qmd://")
-    if "\x00" in value or ".." in value.split("qmd://", 1)[1].split("/"):
+    if not parsed.netloc:
+        raise QmdUnavailable("qmd document URI requires a collection")
+    if not parsed.path or parsed.path == "/":
+        raise QmdUnavailable("qmd document URI requires a document path")
+    decoded_collection = unquote(parsed.netloc)
+    if "\x00" in value or "\x00" in decoded_collection:
         raise QmdUnavailable("qmd document URI contains an unsafe path segment")
+
+    segments = parsed.path.split("/")[1:]
+    for segment in segments:
+        decoded = unquote(segment)
+        if (
+            decoded in {"", ".", ".."}
+            or "\x00" in decoded
+            or "/" in decoded
+            or "\\" in decoded
+        ):
+            raise QmdUnavailable("qmd document URI contains an unsafe path segment")
     return value
 
 
 def normalize_qmd_file(file_value: str, fallback_collection: str) -> tuple[str, str, str]:
     value = file_value.strip()
     if value.startswith("qmd://"):
+        validate_qmd_document_uri(value)
         without_scheme = value[len("qmd://") :]
     else:
         without_scheme = value
