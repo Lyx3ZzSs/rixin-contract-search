@@ -203,7 +203,7 @@ export function TaskProgressPage() {
     () => documents.filter((document) => matchesFilters(document, decisionFilter, reviewFilter, keywordFilter)),
     [documents, decisionFilter, keywordFilter, reviewFilter]
   );
-  const selectedDocument = filteredDocuments.find((item) => item.document_uri === selectedUri) || filteredDocuments[0] || null;
+  const selectedDocument = filteredDocuments.find((item) => item.document_uri === selectedUri) || null;
   const visibleLedger = useMemo(() => {
     if (!ledger.length) return [];
     if (!selectedDocument) return ledger;
@@ -215,11 +215,13 @@ export function TaskProgressPage() {
 
   useEffect(() => {
     if (!selectedDocumentUri) {
-      setPreviewTarget(null);
-      setPreviewMeta(null);
-      setPreviewContext(null);
-      setPreviewError(null);
-      setPreviewLoading(false);
+      if (!previewTarget) {
+        setPreviewTarget(null);
+        setPreviewMeta(null);
+        setPreviewContext(null);
+        setPreviewError(null);
+        setPreviewLoading(false);
+      }
       return;
     }
 
@@ -563,8 +565,8 @@ function ConditionMatrixPanel({
         </div>
       ) : (
         <div className="matrix-table-scroll">
-          <div className="matrix-table" role="table" aria-label="条件矩阵">
-            <div className="matrix-row matrix-head" role="row" style={matrixStyle}>
+          <div className="matrix-table" role="table" aria-label="条件矩阵" style={matrixStyle}>
+            <div className="matrix-row matrix-head" role="row">
               <span role="columnheader">文档</span>
               {columns.map((conditionId) => (
                 <span role="columnheader" key={conditionId}>
@@ -573,7 +575,7 @@ function ConditionMatrixPanel({
               ))}
             </div>
             {matrix.rows.map((row) => (
-              <div className={`matrix-row ${row.documentUri === selectedDocumentUri ? 'is-selected' : ''}`} key={row.documentUri} role="row" style={matrixStyle}>
+              <div className={`matrix-row ${row.documentUri === selectedDocumentUri ? 'is-selected' : ''}`} key={row.documentUri} role="row">
                 <button
                   aria-current={row.documentUri === selectedDocumentUri ? 'true' : undefined}
                   className="matrix-document-button"
@@ -706,24 +708,27 @@ function QmdContextPanel({
   onPreview: (target: PreviewTarget) => void;
   taskId: string;
 }) {
-  const documentUri = document?.document_uri || null;
+  const documentUri = document?.document_uri || previewTarget?.documentUri || preview?.document_uri || context?.document_uri || null;
   const canOpen = Boolean(preview?.can_open && documentUri);
   const canDownload = Boolean(preview?.can_download && documentUri);
   const conditionLabel = context?.condition_id ? `条件：${context.condition_id}` : '条件：-';
   const pageLabel = context && context.page != null ? `页码：${context.page}` : '页码：-';
   const anchorLabel = context?.anchor || '锚点：-';
   const reloadTarget = previewTarget || { documentUri: documentUri || '', conditionId: null, page: null };
+  const hasContext = Boolean(document || previewTarget || preview || context);
+  const displayTitle = preview?.document_title || document?.document_title || document?.document_path || documentUri || '原文上下文';
+  const displaySummary = preview?.summary || document?.collection || documentUri || '点击条件矩阵或证据账本查看原文上下文';
 
   return (
     <section className="phase3-panel">
       <div className="section-title-row">
         <div>
           <h2>原文上下文</h2>
-          <span>{document ? document.document_title || document.document_path : '点击条件矩阵或证据账本查看原文上下文'}</span>
+          <span>{document ? document.document_title || document.document_path : documentUri || '点击条件矩阵或证据账本查看原文上下文'}</span>
         </div>
         <span>{loading ? '加载中' : context?.source_tool || '待选中'}</span>
       </div>
-      {!document ? (
+      {!hasContext ? (
         <div className="empty-state compact">
           <strong>请选择一份合同</strong>
           <span>点击条件矩阵或证据账本查看原文上下文。</span>
@@ -738,8 +743,8 @@ function QmdContextPanel({
           ) : null}
           <div className="context-toolbar">
             <div>
-              <strong>{preview?.document_title || document.document_title || document.document_path}</strong>
-              <span>{preview?.summary || document.collection || document.document_uri}</span>
+              <strong>{displayTitle}</strong>
+              <span>{displaySummary}</span>
             </div>
             <div className="context-actions">
               <button
@@ -774,7 +779,7 @@ function QmdContextPanel({
                 <span>{conditionLabel}</span>
                 <span>{pageLabel}</span>
                 <span>{anchorLabel}</span>
-                <span>{preview?.collection || document.collection || 'collection：-'}</span>
+                <span>{preview?.collection || document?.collection || 'collection：-'}</span>
               </div>
             </div>
           )}

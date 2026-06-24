@@ -452,8 +452,66 @@ describe('TaskProgressPage', () => {
     );
 
     const matrix = await screen.findByRole('table', { name: '条件矩阵' });
+    expect(matrix.getAttribute('style')).toContain('--matrix-columns:');
+    expect(Array.from(matrix.querySelectorAll('.matrix-row')).every((row) => (row as HTMLElement).style.gridTemplateColumns === '')).toBe(true);
     expect(within(matrix).getByRole('button', { name: '采购合同' })).toBeInTheDocument();
     expect(within(matrix).getByRole('button', { name: '补充协议' })).toBeInTheDocument();
+  });
+
+  it('keeps loaded qmd context visible when filtering the selected document out of the list', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(multiDocumentSummary))
+      .mockResolvedValueOnce(streamResponse([]))
+      .mockResolvedValueOnce(jsonResponse(multiDocumentSummary))
+      .mockResolvedValueOnce(jsonResponse(multiDocumentResults))
+      .mockResolvedValueOnce(jsonResponse(multiDocumentVerdicts))
+      .mockResolvedValueOnce(jsonResponse(evidenceLedger))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          document_uri: 'qmd://company_docs/contracts/supplement.md',
+          document_title: '补充协议',
+          collection: 'company_docs',
+          toc: [],
+          summary: '补充协议预览摘要',
+          can_open: true,
+          can_download: true
+        })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          document_uri: 'qmd://company_docs/contracts/supplement.md',
+          condition_id: 'general_match',
+          page: 2,
+          anchor: '价款',
+          text: '补充协议约定价款保持不变',
+          source_tool: 'doc_read'
+        })
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <MemoryRouter initialEntries={['/tasks/task-1']}>
+        <Routes>
+          <Route path="/tasks/:taskId" element={<TaskProgressPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    const matrix = await screen.findByRole('table', { name: '条件矩阵' });
+    await user.click(within(matrix).getByRole('button', { name: '补充协议' }));
+    await user.click(within(matrix).getByRole('button', { name: '不满足' }));
+
+    await waitFor(() => expect(screen.getByText('条件：general_match')).toBeInTheDocument());
+
+    await user.type(screen.getByPlaceholderText('标题、路径、依据'), 'purchase');
+
+    await waitFor(() => expect(screen.getByText('补充协议预览摘要')).toBeInTheDocument());
+    expect(screen.queryByText('请选择一份合同')).not.toBeInTheDocument();
+    expect(screen.getByText('条件：general_match')).toBeInTheDocument();
+    expect(screen.getByText('补充协议预览摘要')).toBeInTheDocument();
+    expect(screen.getByText('qmd://company_docs/contracts/supplement.md')).toBeInTheDocument();
   });
 
   it('shows a visible error when final results fail after completion', async () => {
