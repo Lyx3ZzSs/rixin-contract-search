@@ -1,3 +1,4 @@
+from app.enums import VerificationStrategy
 from app.schemas import ScreeningCondition, ScreeningPlanPayload
 
 
@@ -7,5 +8,22 @@ def build_screening_plan(query: str) -> ScreeningPlanPayload:
     if "金额" in query or "合同总价" in query or "价" in query:
         queries.append("合同总价 人民币 万元")
     deduped = list(dict.fromkeys(q.strip() for q in queries if q.strip()))
-    condition = ScreeningCondition(id="general_match", description=query, operator="semantic_match", value=query, qmd_queries=deduped, evidence_required=1, structured=structured)
-    return ScreeningPlanPayload(target="qmd_document", conditions=[condition], decision_policy="phase1_keyword_candidate_uncertain_on_structured_comparison")
+    condition = ScreeningCondition(
+        id="general_match",
+        description=query,
+        operator="semantic_match",
+        value=query,
+        qmd_queries=deduped,
+        evidence_required=1,
+        structured=structured,
+        verification_strategy=VerificationStrategy.grep_then_read,
+        evidence_terms=deduped,
+        semantic_questions=[query],
+        target_sections=[],
+    )
+    return ScreeningPlanPayload(
+        target="qmd_document",
+        plan_version=2,
+        conditions=[condition],
+        decision_policy="all_required_conditions_satisfied_else_uncertain_on_missing_or_conflict",
+    )

@@ -199,6 +199,9 @@ class ScreeningCondition(BaseModel):
     verification_strategy: VerificationStrategy = VerificationStrategy.query_only
     required_evidence_count: int = Field(default=1, ge=1)
     negative_evidence_allowed: bool = False
+    evidence_terms: list[str] = Field(default_factory=list)
+    semantic_questions: list[str] = Field(default_factory=list)
+    target_sections: list[str] = Field(default_factory=list)
 
     @model_validator(mode="before")
     @classmethod

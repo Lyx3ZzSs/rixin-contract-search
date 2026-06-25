@@ -6,6 +6,7 @@ def test_runtime_agent_llm_has_no_rule_based_fallback():
 
 def test_openai_compatible_llm_plan_fills_fixed_metadata_when_model_omits_it():
     from app.services.agent.llm import OpenAICompatibleAgentLlm
+    from app.enums import VerificationStrategy
 
     agent_llm = OpenAICompatibleAgentLlm.__new__(OpenAICompatibleAgentLlm)
     agent_llm._json = lambda _system, _payload: {
@@ -25,8 +26,10 @@ def test_openai_compatible_llm_plan_fills_fixed_metadata_when_model_omits_it():
     plan = agent_llm.plan("哪份合同采购了GPU服务器和存储服务器？")
 
     assert plan.target == "qmd_document"
-    assert plan.decision_policy == "phase1_keyword_candidate_uncertain_on_structured_comparison"
+    assert plan.plan_version == 2
+    assert plan.decision_policy == "all_required_conditions_satisfied_else_uncertain_on_missing_or_conflict"
     assert plan.conditions[0].id == "gpu_storage_purchase"
+    assert plan.conditions[0].verification_strategy == VerificationStrategy.grep_then_read
 
 
 def test_openai_compatible_llm_plan_accepts_plan_wrapper():

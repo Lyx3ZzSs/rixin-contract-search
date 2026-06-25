@@ -61,6 +61,26 @@ def test_screening_plan_v2_accepts_structured_amount_condition():
     assert condition.verification_strategy == "grep_then_read"
 
 
+def test_screening_condition_accepts_evidence_locator_fields():
+    condition = ScreeningCondition(
+        id="gpu_server",
+        description="合同采购了GPU服务器",
+        operator="semantic_match",
+        value="采购GPU服务器",
+        qmd_queries=["采购GPU服务器"],
+        evidence_terms=["GPU服务器", "HD-GPU-4090-4U"],
+        semantic_questions=["合同是否采购GPU服务器？"],
+        target_sections=["采购内容", "设备清单"],
+        evidence_required=1,
+        structured=False,
+        verification_strategy="grep_then_read",
+    )
+
+    assert condition.evidence_terms == ["GPU服务器", "HD-GPU-4090-4U"]
+    assert condition.semantic_questions == ["合同是否采购GPU服务器？"]
+    assert condition.target_sections == ["采购内容", "设备清单"]
+
+
 def test_screening_plan_v1_still_accepts_existing_shape():
     plan = ScreeningPlanPayload(
         target="qmd_document",

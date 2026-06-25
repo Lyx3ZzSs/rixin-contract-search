@@ -38,6 +38,95 @@ class EmptyDeepReadQmd(DeepReadQmd):
         return {"structuredContent": {"text": ""}}
 
 
+class AcquisitionTermQmd(DeepReadQmd):
+    def __init__(self):
+        self.grep_patterns = []
+
+    def query(self, query_text: str, collections: list[str], limit: int):
+        return [
+            {
+                "docid": "doc-1",
+                "file": "qmd://company_docs/contracts/equipment.md",
+                "title": "设备采购合同",
+                "score": 0.93,
+                "snippet": "# 设备采购合同 ## 一、合同基本信息",
+            }
+        ]
+
+    def doc_grep(self, document_uri: str, pattern: str):
+        self.grep_patterns.append(pattern)
+        if pattern == "GPU服务器":
+            return {"structuredContent": {"matches": [{"page": 20, "text": "| 1 | GPU服务器 | 4台 |", "anchor": "line:20"}]}}
+        return {"structuredContent": {"matches": []}}
+
+    def doc_read(self, document_uri: str, page=None, anchor=None, window=2):
+        return {"structuredContent": {"text": "| 1 | GPU服务器 | 4台 |", "page": page, "anchor": anchor}}
+
+
+class SemanticDocumentQueryQmd(DeepReadQmd):
+    def __init__(self):
+        self.grep_patterns = []
+        self.semantic_questions = []
+
+    def query(self, query_text: str, collections: list[str], limit: int):
+        return [
+            {
+                "docid": "doc-1",
+                "file": "qmd://company_docs/contracts/scanned.md",
+                "title": "扫描设备合同",
+                "score": 0.9,
+                "snippet": "# 扫描设备合同",
+            }
+        ]
+
+    def doc_grep(self, document_uri: str, pattern: str):
+        self.grep_patterns.append(pattern)
+        return {"structuredContent": {"matches": []}}
+
+    def doc_query(self, document_uri: str, question: str):
+        self.semantic_questions.append(question)
+        return {"structuredContent": {"matches": [{"page": 20, "text": "OCR片段：G P U 服务器 4台", "anchor": "line:20"}]}}
+
+    def doc_read(self, document_uri: str, page=None, anchor=None, window=2):
+        return {"structuredContent": {"text": "OCR片段：G P U 服务器 4台，型号HD-GPU-4090-4U。", "page": page, "anchor": anchor}}
+
+
+class TocGuidedReadQmd(DeepReadQmd):
+    def __init__(self):
+        self.read_anchors = []
+
+    def query(self, query_text: str, collections: list[str], limit: int):
+        return [
+            {
+                "docid": "doc-1",
+                "file": "qmd://company_docs/contracts/equipment.md",
+                "title": "设备采购合同",
+                "score": 0.9,
+                "snippet": "# 设备采购合同",
+            }
+        ]
+
+    def doc_grep(self, document_uri: str, pattern: str):
+        return {"structuredContent": {"matches": []}}
+
+    def doc_query(self, document_uri: str, question: str):
+        return {"structuredContent": {"matches": []}}
+
+    def doc_toc(self, document_uri: str):
+        return {
+            "structuredContent": {
+                "sections": [
+                    {"title": "一、合同基本信息", "address": "line:1-10", "children": []},
+                    {"title": "二、采购内容", "address": "line:11-30", "children": []},
+                ]
+            }
+        }
+
+    def doc_read(self, document_uri: str, page=None, anchor=None, window=2):
+        self.read_anchors.append(anchor)
+        return {"structuredContent": {"text": "采购内容：GPU服务器4台，存储服务器2台。", "page": page, "anchor": anchor}}
+
+
 class VerdictLlm:
     def plan(self, raw_query: str):
         return ScreeningPlanPayload(
@@ -85,6 +174,56 @@ class EmptyEvidenceSatisfiedLlm(VerdictLlm):
             "contradicting_evidence": [],
             "missing_reason": None,
         }
+
+
+class AcquisitionTermLlm(VerdictLlm):
+    def plan(self, raw_query: str):
+        return ScreeningPlanPayload(
+            target="qmd_document",
+            plan_version=2,
+            conditions=[
+                ScreeningCondition(
+                    id="gpu_server",
+                    description="合同采购了GPU服务器",
+                    operator="semantic_match",
+                    value="采购GPU服务器",
+                    qmd_queries=["采购GPU服务器", "购买GPU服务器", "GPU服务器采购"],
+                    evidence_terms=["GPU服务器"],
+                    semantic_questions=["合同是否采购GPU服务器？"],
+                    target_sections=["采购内容"],
+                    verification_strategy="grep_then_read",
+                    required_evidence_count=1,
+                    evidence_required=1,
+                    structured=False,
+                )
+            ],
+            decision_policy="all_required_conditions_satisfied_else_uncertain_on_missing_or_conflict",
+        )
+
+
+class SemanticLocatorLlm(VerdictLlm):
+    def plan(self, raw_query: str):
+        return ScreeningPlanPayload(
+            target="qmd_document",
+            plan_version=2,
+            conditions=[
+                ScreeningCondition(
+                    id="gpu_server",
+                    description="合同采购了GPU服务器",
+                    operator="semantic_match",
+                    value="采购GPU服务器",
+                    qmd_queries=["采购GPU服务器"],
+                    evidence_terms=["GPU服务器"],
+                    semantic_questions=["合同是否采购GPU服务器？"],
+                    target_sections=["采购内容"],
+                    verification_strategy="grep_then_read",
+                    required_evidence_count=1,
+                    evidence_required=1,
+                    structured=False,
+                )
+            ],
+            decision_policy="all_required_conditions_satisfied_else_uncertain_on_missing_or_conflict",
+        )
 
 
 class ForgedEvidenceSatisfiedLlm(VerdictLlm):
@@ -292,6 +431,85 @@ def test_agent_persists_condition_verdicts_and_verified_document_result(db_sessi
     result = session.scalars(select(ScreeningDocumentResult).where(ScreeningDocumentResult.task_id == task.id)).one()
     assert result.decision == ResultDecision.included.value
     assert result.verification_status == VerificationStatus.deep_read_verified.value
+    assert result.evidence_support_rate == 1.0
+
+
+def test_agent_grep_verification_falls_back_to_salient_condition_term(db_session):
+    from app.services.agent.langgraph_agent import ContractScreeningAgent
+
+    session, _ = db_session
+    task = ScreeningTask(
+        id=uuid4(),
+        owner_id="internal-user",
+        title="设备筛选",
+        raw_query="哪份合同采购了GPU服务器？",
+        status=TaskStatus.retrieving.value,
+        current_stage=TaskStatus.retrieving.value,
+        progress_percent=10,
+        metrics={},
+    )
+    qmd = AcquisitionTermQmd()
+    session.add(task)
+    session.commit()
+
+    ContractScreeningAgent(llm=AcquisitionTermLlm(), qmd=qmd, collections=["company_docs"], top_k=5, max_retrieval_rounds=1).run(session, task)
+
+    assert qmd.grep_patterns == ["GPU服务器"]
+    result = session.scalars(select(ScreeningDocumentResult).where(ScreeningDocumentResult.task_id == task.id)).one()
+    assert result.decision == ResultDecision.included.value
+    assert result.evidence_support_rate == 1.0
+
+
+def test_agent_uses_document_semantic_query_when_grep_misses_ocr_text(db_session):
+    from app.services.agent.langgraph_agent import ContractScreeningAgent
+
+    session, _ = db_session
+    task = ScreeningTask(
+        id=uuid4(),
+        owner_id="internal-user",
+        title="扫描件筛选",
+        raw_query="哪份合同采购了GPU服务器？",
+        status=TaskStatus.retrieving.value,
+        current_stage=TaskStatus.retrieving.value,
+        progress_percent=10,
+        metrics={},
+    )
+    qmd = SemanticDocumentQueryQmd()
+    session.add(task)
+    session.commit()
+
+    ContractScreeningAgent(llm=SemanticLocatorLlm(), qmd=qmd, collections=["company_docs"], top_k=5, max_retrieval_rounds=1).run(session, task)
+
+    assert qmd.grep_patterns
+    assert qmd.semantic_questions == ["合同是否采购GPU服务器？"]
+    result = session.scalars(select(ScreeningDocumentResult).where(ScreeningDocumentResult.task_id == task.id)).one()
+    assert result.decision == ResultDecision.included.value
+    assert result.evidence_support_rate == 1.0
+
+
+def test_agent_reads_target_section_when_grep_and_semantic_query_miss(db_session):
+    from app.services.agent.langgraph_agent import ContractScreeningAgent
+
+    session, _ = db_session
+    task = ScreeningTask(
+        id=uuid4(),
+        owner_id="internal-user",
+        title="章节筛选",
+        raw_query="哪份合同采购了GPU服务器？",
+        status=TaskStatus.retrieving.value,
+        current_stage=TaskStatus.retrieving.value,
+        progress_percent=10,
+        metrics={},
+    )
+    qmd = TocGuidedReadQmd()
+    session.add(task)
+    session.commit()
+
+    ContractScreeningAgent(llm=SemanticLocatorLlm(), qmd=qmd, collections=["company_docs"], top_k=5, max_retrieval_rounds=1).run(session, task)
+
+    assert qmd.read_anchors == ["line:11-30"]
+    result = session.scalars(select(ScreeningDocumentResult).where(ScreeningDocumentResult.task_id == task.id)).one()
+    assert result.decision == ResultDecision.included.value
     assert result.evidence_support_rate == 1.0
 
 

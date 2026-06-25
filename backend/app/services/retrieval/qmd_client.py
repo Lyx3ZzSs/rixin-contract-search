@@ -1,3 +1,5 @@
+import json
+import re
 from json import JSONDecodeError
 from typing import Any
 from urllib.parse import unquote_to_bytes, urlsplit
@@ -99,15 +101,20 @@ class QmdClient:
         ]
 
     def doc_toc(self, document_uri: str) -> dict[str, Any]:
-        return self._deep_read_tool(
-            "doc_toc",
-            {"document_uri": validate_qmd_document_uri(document_uri)},
+        return normalize_qmd_payload(
+            self._deep_read_tool(
+                "doc_toc",
+                {"file": qmd_document_file_arg(document_uri)},
+            )
         )
 
     def doc_grep(self, document_uri: str, pattern: str) -> dict[str, Any]:
-        return self._deep_read_tool(
-            "doc_grep",
-            {"document_uri": validate_qmd_document_uri(document_uri), "pattern": pattern},
+        return normalize_qmd_payload(
+            self._deep_read_tool(
+                "doc_grep",
+                {"file": qmd_document_file_arg(document_uri), "pattern": pattern},
+            ),
+            normalize_matches=True,
         )
 
     def doc_read(
@@ -117,20 +124,30 @@ class QmdClient:
         anchor: str | None = None,
         window: int = 2,
     ) -> dict[str, Any]:
-        return self._deep_read_tool(
-            "doc_read",
-            {
-                "document_uri": validate_qmd_document_uri(document_uri),
-                "page": page,
-                "anchor": anchor,
-                "window": window,
-            },
+        address = clean_optional_string(anchor)
+        if address is None and page is not None:
+            address = f"line:{page}"
+        if address is None:
+            address = "line:1-120"
+        return normalize_qmd_payload(
+            self._deep_read_tool(
+                "doc_read",
+                {
+                    "file": qmd_document_file_arg(document_uri),
+                    "addresses": [address],
+                    "max_tokens": max(1000, int(window or 2) * 1000),
+                },
+            ),
+            normalize_read=True,
         )
 
     def doc_query(self, document_uri: str, question: str) -> dict[str, Any]:
-        return self._deep_read_tool(
-            "doc_query",
-            {"document_uri": validate_qmd_document_uri(document_uri), "question": question},
+        return normalize_qmd_payload(
+            self._deep_read_tool(
+                "doc_query",
+                {"file": qmd_document_file_arg(document_uri), "query": question},
+            ),
+            normalize_matches=True,
         )
 
     def doc_elements(
@@ -139,14 +156,13 @@ class QmdClient:
         page: int | None = None,
         anchor: str | None = None,
     ) -> dict[str, Any]:
-        return self._deep_read_tool(
-            "doc_elements",
-            {
-                "document_uri": validate_qmd_document_uri(document_uri),
-                "page": page,
-                "anchor": anchor,
-            },
-        )
+        arguments: dict[str, Any] = {"file": qmd_document_file_arg(document_uri)}
+        address = clean_optional_string(anchor)
+        if address is None and page is not None:
+            address = f"line:{page}"
+        if address is not None:
+            arguments["addresses"] = [address]
+        return normalize_qmd_payload(self._deep_read_tool("doc_elements", arguments))
 
     def document_preview(self, document_uri: str) -> dict[str, Any]:
         safe_uri = validate_qmd_document_uri(document_uri)
@@ -154,8 +170,10 @@ class QmdClient:
         structured = payload.get("structuredContent")
         if isinstance(structured, dict):
             toc = structured.get("toc")
-            document_title = clean_optional_string(structured.get("title"))
-            collection = clean_optional_string(structured.get("collection"))
+            if not isinstance(toc, list):
+                toc = structured.get("sections")
+            document_title = clean_optional_string(structured.get("title")) or first_qmd_section_title(toc)
+            collection = clean_optional_string(structured.get("collection")) or qmd_document_collection(safe_uri)
             summary = clean_optional_string(structured.get("summary"))
             open_url = structured.get("open_url")
             download_url = structured.get("download_url")
@@ -308,6 +326,137 @@ def parse_status_collections(text: str) -> list[dict[str, Any]]:
             if name:
                 collections.append({"name": name})
     return collections
+
+
+def qmd_document_collection(document_uri: str) -> str:
+    safe_uri = validate_qmd_document_uri(document_uri)
+    parsed = urlsplit(safe_uri)
+    return strict_percent_decode(parsed.netloc)
+
+
+def qmd_document_file_arg(document_uri: str) -> str:
+    safe_uri = validate_qmd_document_uri(document_uri)
+    parsed = urlsplit(safe_uri)
+    collection = strict_percent_decode(parsed.netloc)
+    path = "/".join(strict_percent_decode(segment) for segment in parsed.path.split("/")[1:])
+    return f"{collection}/{path}"
+
+
+def normalize_qmd_payload(
+    payload: dict[str, Any],
+    *,
+    normalize_matches: bool = False,
+    normalize_read: bool = False,
+) -> dict[str, Any]:
+    structured = payload.get("structuredContent")
+    if not isinstance(structured, dict):
+        parsed = parse_qmd_text_json(payload)
+        if parsed is not None:
+            payload = dict(payload)
+            structured = parsed
+            payload["structuredContent"] = structured
+    if not isinstance(structured, dict):
+        return payload
+    if normalize_matches:
+        structured = dict(structured)
+        structured["matches"] = normalize_qmd_matches(structured.get("matches") or structured.get("results"))
+        payload = dict(payload)
+        payload["structuredContent"] = structured
+    if normalize_read:
+        structured = normalize_qmd_read_content(structured)
+        payload = dict(payload)
+        payload["structuredContent"] = structured
+    return payload
+
+
+def parse_qmd_text_json(payload: dict[str, Any]) -> dict[str, Any] | None:
+    text = extract_text(payload)
+    if not text:
+        return None
+    try:
+        parsed = json.loads(text)
+    except JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def normalize_qmd_matches(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    normalized = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        match = dict(item)
+        address = clean_optional_string(match.get("address") or match.get("anchor"))
+        line = qmd_line_from_address(address)
+        location = match.get("location")
+        if line is None and isinstance(location, dict):
+            line = coerce_int(location.get("line"))
+        text = clean_optional_string(match.get("text")) or clean_optional_string(match.get("content"))
+        if address is not None:
+            match["anchor"] = address
+        if line is not None:
+            match["page"] = line
+        if text is not None:
+            match["text"] = text
+        normalized.append(match)
+    return normalized
+
+
+def normalize_qmd_read_content(structured: dict[str, Any]) -> dict[str, Any]:
+    if clean_optional_string(structured.get("text")):
+        return structured
+    sections = structured.get("sections")
+    if not isinstance(sections, list):
+        return structured
+    texts = []
+    first_address = None
+    for section in sections:
+        if not isinstance(section, dict):
+            continue
+        if first_address is None:
+            first_address = clean_optional_string(section.get("address"))
+        text = clean_optional_string(section.get("text"))
+        if text is not None:
+            texts.append(text)
+    normalized = dict(structured)
+    if texts:
+        normalized["text"] = "\n\n".join(texts)
+    if first_address is not None:
+        normalized["anchor"] = first_address
+        line = qmd_line_from_address(first_address)
+        if line is not None:
+            normalized["page"] = line
+    normalized["source_tool"] = "doc_read"
+    return normalized
+
+
+def qmd_line_from_address(address: str | None) -> int | None:
+    if address is None:
+        return None
+    match = re.match(r"^line:(\d+)", address.strip())
+    if not match:
+        return None
+    return int(match.group(1))
+
+
+def coerce_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def first_qmd_section_title(value: Any) -> str | None:
+    if not isinstance(value, list):
+        return None
+    for item in value:
+        if isinstance(item, dict):
+            title = clean_optional_string(item.get("title"))
+            if title is not None:
+                return title
+    return None
 
 
 def validate_qmd_document_uri(document_uri: str) -> str:

@@ -166,20 +166,49 @@ def test_doc_read_calls_mcp_tool(monkeypatch):
 
     monkeypatch.setattr(client, "_call_tool", fake_call_tool)
 
-    payload = client.doc_read("qmd://company_docs/contracts/a.md", page=3, anchor=None, window=2)
+    payload = client.doc_read("qmd://company_docs/contracts/a.md", page=3, anchor="line:3", window=2)
 
     assert calls == [
         (
             "doc_read",
             {
-                "document_uri": "qmd://company_docs/contracts/a.md",
-                "page": 3,
-                "anchor": None,
-                "window": 2,
+                "file": "company_docs/contracts/a.md",
+                "addresses": ["line:3"],
+                "max_tokens": 2000,
             },
         )
     ]
     assert payload["structuredContent"]["text"] == "合同总价为人民币120万元"
+
+
+def test_doc_grep_calls_mineru_file_schema_and_normalizes_text_json_response(monkeypatch):
+    client = QmdClient(url="http://qmd.example/mcp")
+    calls = []
+
+    def fake_call_tool(name, arguments):
+        calls.append((name, arguments))
+        return {
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        '{"file":"company_docs/contracts/a.md","pattern":"GPU服务器","total_matches":1,'
+                        '"matches":[{"address":"line:20","content":"| 1 | GPU服务器 | 4台 |",'
+                        '"match":"GPU服务器","location":{"line":20}}]}'
+                    ),
+                }
+            ]
+        }
+
+    monkeypatch.setattr(client, "_call_tool", fake_call_tool)
+
+    payload = client.doc_grep("qmd://company_docs/contracts/a.md", "GPU服务器")
+
+    assert calls == [("doc_grep", {"file": "company_docs/contracts/a.md", "pattern": "GPU服务器"})]
+    match = payload["structuredContent"]["matches"][0]
+    assert match["anchor"] == "line:20"
+    assert match["page"] == 20
+    assert match["text"] == "| 1 | GPU服务器 | 4台 |"
 
 
 def test_document_preview_maps_structured_content(monkeypatch):
@@ -187,6 +216,7 @@ def test_document_preview_maps_structured_content(monkeypatch):
 
     def fake_call_tool(name, arguments):
         assert name == "doc_toc"
+        assert arguments == {"file": "company_docs/contracts/a.md"}
         return {
             "structuredContent": {
                 "title": "A采购合同",
@@ -294,7 +324,7 @@ def test_document_preview_ignores_non_string_urls(monkeypatch):
     assert preview["download_url"] is None
 
 
-def test_document_preview_ignores_non_string_metadata(monkeypatch):
+def test_document_preview_ignores_non_string_metadata_and_infers_collection(monkeypatch):
     client = QmdClient(url="http://qmd.example/mcp")
 
     def fake_call_tool(name, arguments):
@@ -312,7 +342,7 @@ def test_document_preview_ignores_non_string_metadata(monkeypatch):
     preview = client.document_preview("qmd://company_docs/contracts/a.md")
 
     assert preview["document_title"] is None
-    assert preview["collection"] is None
+    assert preview["collection"] == "company_docs"
     assert preview["summary"] is None
 
 

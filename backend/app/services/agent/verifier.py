@@ -1,3 +1,4 @@
+import re
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -14,6 +15,9 @@ from app.enums import (
 from app.models import ConditionVerdict, ScreeningDocumentResult, ScreeningTask
 from app.schemas import ScreeningCondition, ScreeningPlanPayload
 from app.services.agent.aggregator import aggregate_document_candidates
+
+MAX_GREP_PATTERNS = 24
+MAX_SEMANTIC_QUESTIONS = 8
 
 
 def verify_documents(session: Session, task: ScreeningTask, plan: ScreeningPlanPayload, qmd: Any, llm: Any) -> int:
@@ -42,34 +46,148 @@ def _gather_evidence(qmd: Any, document: dict[str, Any], condition: ScreeningCon
 
 def _grep_then_read_evidence(qmd: Any, document: dict[str, Any], condition: ScreeningCondition) -> tuple[list[dict[str, Any]], str | None]:
     document_uri = str(document["document_uri"])
-    query_text = condition.qmd_queries[0] if condition.qmd_queries else condition.description
     try:
-        grep_payload = qmd.doc_grep(document_uri, query_text)
-        first = _first_match(grep_payload)
-        if not first:
-            return [], "verification_failed"
-        read_payload = qmd.doc_read(document_uri, page=first.get("page"), anchor=first.get("anchor"), window=2)
+        for query_text in _grep_patterns_for_condition(condition):
+            grep_payload = qmd.doc_grep(document_uri, query_text)
+            first = _first_match(grep_payload)
+            if first:
+                evidence = _read_match_evidence(qmd, document, condition, first)
+                if evidence:
+                    return [evidence], None
+
+        for question in _semantic_questions_for_condition(condition):
+            query_payload = qmd.doc_query(document_uri, question)
+            first = _first_match(query_payload)
+            if first:
+                evidence = _read_match_evidence(qmd, document, condition, first)
+                if evidence:
+                    return [evidence], None
+
+        for anchor in _target_section_anchors(qmd, document_uri, condition):
+            read_payload = qmd.doc_read(document_uri, page=None, anchor=anchor, window=2)
+            evidence = _read_payload_evidence(document, condition, read_payload, fallback={})
+            if evidence:
+                return [evidence], None
     except Exception:
         return [], "verification_failed"
+    return [], "verification_failed"
+
+
+def _read_match_evidence(qmd: Any, document: dict[str, Any], condition: ScreeningCondition, match: dict[str, Any]) -> dict[str, Any] | None:
+    read_payload = qmd.doc_read(str(document["document_uri"]), page=match.get("page"), anchor=match.get("anchor"), window=2)
+    return _read_payload_evidence(document, condition, read_payload, fallback=match)
+
+
+def _read_payload_evidence(document: dict[str, Any], condition: ScreeningCondition, read_payload: dict[str, Any], fallback: dict[str, Any]) -> dict[str, Any] | None:
     structured = read_payload.get("structuredContent") if isinstance(read_payload, dict) else None
     structured = structured if isinstance(structured, dict) else {}
-    text = str(structured.get("text") or first.get("text") or "").strip()
+    text = str(structured.get("text") or fallback.get("text") or "").strip()
     if not text:
-        return [], "verification_failed"
-    page = _coerce_int(structured.get("page", first.get("page")))
-    anchor = structured.get("anchor", first.get("anchor"))
-    return [
-        _ledger_evidence(
-            document=document,
-            condition_id=condition.id,
-            text=text,
-            page=page,
-            anchor=str(anchor) if anchor is not None else None,
-            role=EvidenceRole.supporting.value,
-            source_tool=EvidenceSourceTool.doc_read.value,
-            context=text,
-        )
-    ], None
+        return None
+    page = _coerce_int(structured.get("page", fallback.get("page")))
+    anchor = structured.get("anchor", fallback.get("anchor"))
+    return _ledger_evidence(
+        document=document,
+        condition_id=condition.id,
+        text=text,
+        page=page,
+        anchor=str(anchor) if anchor is not None else None,
+        role=EvidenceRole.supporting.value,
+        source_tool=EvidenceSourceTool.doc_read.value,
+        context=text,
+    )
+
+
+def _grep_patterns_for_condition(condition: ScreeningCondition) -> list[str]:
+    patterns: list[str] = []
+
+    for value in getattr(condition, "evidence_terms", []) or []:
+        if not isinstance(value, str):
+            continue
+        patterns.extend(_evidence_locator_terms(value, include_full=True))
+
+    raw_values: list[Any] = [condition.value, condition.description, *list(condition.qmd_queries or [])]
+    for value in raw_values:
+        if isinstance(value, str):
+            patterns.extend(_evidence_locator_terms(value, include_full=True))
+
+    return _dedupe_nonempty(patterns)[:MAX_GREP_PATTERNS]
+
+
+def _semantic_questions_for_condition(condition: ScreeningCondition) -> list[str]:
+    values = [*list(getattr(condition, "semantic_questions", []) or []), condition.description, *list(condition.qmd_queries or [])]
+    return _dedupe_nonempty(str(value).strip() for value in values if isinstance(value, str))[:MAX_SEMANTIC_QUESTIONS]
+
+
+def _target_sections_for_condition(condition: ScreeningCondition) -> list[str]:
+    return _dedupe_nonempty(str(value).strip() for value in (getattr(condition, "target_sections", []) or []) if isinstance(value, str))
+
+
+def _evidence_locator_terms(value: str, *, include_full: bool) -> list[str]:
+    text = _normalize_locator_text(value)
+    if not text:
+        return []
+    terms = [text] if include_full else []
+    terms.extend(re.findall(r"[A-Za-z0-9][A-Za-z0-9._/-]{2,}(?:[\u4e00-\u9fff]{1,6})?", text))
+    terms.extend(re.findall(r"[A-Za-z0-9]{2,}[\u4e00-\u9fff]{2,8}", text))
+    for chunk in re.findall(r"[\u4e00-\u9fff]{4,16}", text):
+        terms.append(chunk)
+        terms.extend(_bounded_ngrams(chunk, min_size=4, max_size=8))
+    return _dedupe_nonempty(terms)
+
+
+def _normalize_locator_text(value: str) -> str:
+    return re.sub(r"[\s，。！？、；：,.!?;:（）()【】\\[\\]{}<>《》\"'“”‘’]+", "", value).strip()
+
+
+def _bounded_ngrams(value: str, *, min_size: int, max_size: int) -> list[str]:
+    terms = []
+    upper = min(max_size, len(value))
+    for size in range(upper, min_size - 1, -1):
+        for start in range(0, len(value) - size + 1):
+            terms.append(value[start : start + size])
+    return terms
+
+
+def _dedupe_nonempty(values: Any) -> list[str]:
+    deduped: list[str] = []
+    seen = set()
+    for value in values:
+        text = str(value).strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        deduped.append(text)
+    return deduped
+
+
+def _target_section_anchors(qmd: Any, document_uri: str, condition: ScreeningCondition) -> list[str]:
+    targets = [_normalize_locator_text(value) for value in _target_sections_for_condition(condition)]
+    targets = [value for value in targets if value]
+    if not targets:
+        return []
+    toc_payload = qmd.doc_toc(document_uri)
+    structured = toc_payload.get("structuredContent") if isinstance(toc_payload, dict) else None
+    structured = structured if isinstance(structured, dict) else {}
+    sections = structured.get("sections")
+    if not isinstance(sections, list):
+        sections = structured.get("toc")
+    return _matching_section_anchors(sections, targets)
+
+
+def _matching_section_anchors(sections: Any, targets: list[str]) -> list[str]:
+    if not isinstance(sections, list):
+        return []
+    anchors = []
+    for section in sections:
+        if not isinstance(section, dict):
+            continue
+        title = _normalize_locator_text(str(section.get("title") or ""))
+        address = section.get("address") or section.get("anchor")
+        if title and isinstance(address, str) and any(target in title or title in target for target in targets):
+            anchors.append(address)
+        anchors.extend(_matching_section_anchors(section.get("children"), targets))
+    return _dedupe_nonempty(anchors)
 
 
 def _query_only_evidence(document: dict[str, Any], condition: ScreeningCondition) -> tuple[list[dict[str, Any]], str | None]:

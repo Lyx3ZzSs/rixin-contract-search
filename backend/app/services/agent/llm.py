@@ -9,6 +9,7 @@ from app.schemas import ScreeningPlanPayload
 
 PLAN_OUTPUT_SCHEMA = {
     "target": "qmd_document",
+    "plan_version": 2,
     "conditions": [
         {
             "id": "short_english_id",
@@ -18,16 +19,26 @@ PLAN_OUTPUT_SCHEMA = {
             "qmd_queries": ["用于qmd检索的中文查询"],
             "evidence_required": 1,
             "structured": False,
+            "verification_strategy": "grep_then_read",
+            "required_evidence_count": 1,
+            "negative_evidence_allowed": False,
+            "evidence_terms": ["可在原文中直接grep的关键词、型号、金额、日期或主体名称"],
+            "semantic_questions": ["用于doc_query的文档内语义问题"],
+            "target_sections": ["优先读取的章节标题，如采购内容、付款方式、验收标准"],
         }
     ],
-    "decision_policy": "phase1_keyword_candidate_uncertain_on_structured_comparison",
+    "decision_policy": "all_required_conditions_satisfied_else_uncertain_on_missing_or_conflict",
 }
 
 PLAN_SYSTEM_PROMPT = (
     "你是合同筛选Agent的规划器。只输出一个JSON对象，不要输出解释、Markdown或代码块。"
-    "输出对象必须只有业务计划字段：target、conditions、decision_policy。"
+    "输出对象必须只有业务计划字段：target、plan_version、conditions、decision_policy。"
     "不要返回task、raw_query、schema、example、说明文字。"
-    "conditions必须是非空数组，每个条件都必须包含id、description、operator、value、qmd_queries、evidence_required、structured。"
+    "plan_version必须为2，decision_policy必须为all_required_conditions_satisfied_else_uncertain_on_missing_or_conflict。"
+    "conditions必须是非空数组，每个条件都必须包含id、description、operator、value、qmd_queries、evidence_required、structured、verification_strategy、required_evidence_count、negative_evidence_allowed、evidence_terms、semantic_questions、target_sections。"
+    "verification_strategy默认使用grep_then_read，用于基于检索结果继续读取原文上下文。"
+    "evidence_terms必须填写可在原文/OCR文本中直接出现的短词、型号、金额、日期、主体名称或关键条款短语，不要只填写完整问题句。"
+    "semantic_questions用于文档内语义检索，target_sections用于TOC章节读取兜底。"
 )
 
 PLAN_REPAIR_SYSTEM_PROMPT = (
@@ -203,6 +214,8 @@ def _extract_plan_candidate(data: Any) -> dict[str, Any]:
 
 def _normalize_plan_shape(data: dict[str, Any]) -> dict[str, Any]:
     candidate = dict(data)
+    candidate["plan_version"] = 2
+    candidate["decision_policy"] = "all_required_conditions_satisfied_else_uncertain_on_missing_or_conflict"
     conditions = candidate.get("conditions")
     if isinstance(conditions, dict):
         conditions = list(conditions.values())
@@ -219,6 +232,11 @@ def _normalize_condition(item: Any) -> Any:
         condition["operator"] = "semantic_match"
     if "structured" not in condition:
         condition["structured"] = False
+    condition["verification_strategy"] = "grep_then_read"
+    if "required_evidence_count" not in condition and "evidence_required" in condition:
+        condition["required_evidence_count"] = condition["evidence_required"]
+    if "negative_evidence_allowed" not in condition:
+        condition["negative_evidence_allowed"] = False
     if "value" not in condition and isinstance(condition.get("description"), str):
         condition["value"] = condition["description"]
     if "qmd_queries" not in condition:
@@ -229,6 +247,11 @@ def _normalize_condition(item: Any) -> Any:
                 break
     if isinstance(condition.get("qmd_queries"), str):
         condition["qmd_queries"] = [condition["qmd_queries"]]
+    for key in ("evidence_terms", "semantic_questions", "target_sections"):
+        if key not in condition:
+            condition[key] = []
+        elif isinstance(condition.get(key), str):
+            condition[key] = [condition[key]]
     return condition
 
 

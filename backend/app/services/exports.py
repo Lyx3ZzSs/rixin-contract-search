@@ -53,7 +53,7 @@ EXPORT_HEADER_LABELS = {
     "missing_conditions": "缺失条件",
     "decision_basis": "条件级判断",
     "uncertain_reasons": "不确定原因",
-    "evidence_support_rate": "证据支持率",
+    "evidence_support_rate": "匹配率",
     "verification_status": "核验状态",
     "review_status": "复核状态",
     "review_decision": "复核判定",

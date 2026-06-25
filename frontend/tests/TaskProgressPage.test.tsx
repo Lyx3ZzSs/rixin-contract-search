@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -347,14 +347,25 @@ describe('TaskProgressPage', () => {
     );
 
     expect(await screen.findByRole('heading', { name: '采购合同', level: 3 })).toBeInTheDocument();
-    expect(await screen.findByText('条件矩阵')).toBeInTheDocument();
-    expect(screen.getByText('证据账本')).toBeInTheDocument();
+    expect(screen.queryByRole('table', { name: '条件矩阵' })).not.toBeInTheDocument();
+    expect(screen.queryByText('证据账本')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '查看采购合同条件核验' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '查看采购合同证据明细' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '查看采购合同原文依据' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '预览采购合同' })).toHaveAttribute(
+      'href',
+      '/api/qmd-documents/open-link?task_id=task-1&document_uri=qmd%3A%2F%2Fcompany_docs%2Fcontracts%2Fpurchase.md'
+    );
+    expect(screen.getByRole('link', { name: '下载采购合同' })).toHaveAttribute(
+      'href',
+      '/api/qmd-documents/download?task_id=task-1&document_uri=qmd%3A%2F%2Fcompany_docs%2Fcontracts%2Fpurchase.md'
+    );
     expect(screen.getByText('company_docs · contracts/purchase.md')).toBeInTheDocument();
     expect(screen.getByTestId('event-progress')).toBeInTheDocument();
     expect(screen.getByText('实时活动')).toBeInTheDocument();
     expect(screen.getByText('已分析 0 份文档')).toBeInTheDocument();
     expect(screen.getByText('入选 · keyword_evidence_matched')).toBeInTheDocument();
-    expect(screen.getByText('点击条件矩阵或证据账本查看原文上下文')).toBeInTheDocument();
+    expect(screen.queryByText('点击条件矩阵或证据账本查看原文上下文')).not.toBeInTheDocument();
     expect(screen.queryByText('NaN%')).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: '任务历史' })).toHaveAttribute('href', '/tasks');
     expect(screen.getByRole('link', { name: '导出 CSV' })).toHaveAttribute('href', '/api/screening-tasks/task-1/export.csv');
@@ -369,7 +380,46 @@ describe('TaskProgressPage', () => {
     });
   });
 
-  it('loads qmd context only after an explicit matrix click', async () => {
+  it('uses evidence support rate as the card match percentage when confidence is low', async () => {
+    const lowConfidenceSupportedResults = {
+      ...results,
+      buckets: {
+        included: [
+          {
+            ...results.buckets.included[0],
+            confidence: 0,
+            evidence_support_rate: 1
+          }
+        ],
+        uncertain: [],
+        excluded: []
+      }
+    };
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/screening-tasks/task-1') return Promise.resolve(jsonResponse(completedSummary));
+      if (url === '/api/screening-tasks/task-1/events') return Promise.resolve(streamResponse([]));
+      if (url === '/api/screening-tasks/task-1/results') return Promise.resolve(jsonResponse(lowConfidenceSupportedResults));
+      if (url === '/api/screening-tasks/task-1/condition-verdicts') return Promise.resolve(jsonResponse(verdicts));
+      if (url === '/api/screening-tasks/task-1/evidence-ledger') return Promise.resolve(jsonResponse(evidenceLedger));
+      return Promise.reject(new Error(`Unexpected URL ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <MemoryRouter initialEntries={['/tasks/task-1']}>
+        <Routes>
+          <Route path="/tasks/:taskId" element={<TaskProgressPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    await screen.findByRole('heading', { name: '采购合同', level: 3 });
+    expect(screen.getByLabelText('采购合同匹配率')).toHaveTextContent('100%');
+    expect(screen.getByLabelText('采购合同匹配率')).toHaveTextContent('匹配率');
+  });
+
+  it('loads qmd context only after an explicit source evidence click', async () => {
     const user = userEvent.setup();
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
@@ -415,14 +465,15 @@ describe('TaskProgressPage', () => {
       </MemoryRouter>
     );
 
-    const matrix = await screen.findByRole('table', { name: '条件矩阵' });
+    await screen.findByRole('heading', { name: '采购合同', level: 3 });
     expect(fetchMock.mock.calls.map(([input]) => String(input)).some((url) => url.includes('/api/qmd-documents/'))).toBe(false);
 
-    await user.click(within(matrix).getByRole('button', { name: '采购合同' }));
+    await user.click(screen.getByRole('button', { name: '查看采购合同条件核验' }));
+    expect(screen.getByRole('dialog', { name: '采购合同详情' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: '条件核验' })).toHaveAttribute('aria-selected', 'true');
     expect(fetchMock.mock.calls.map(([input]) => String(input)).some((url) => url.includes('/api/qmd-documents/'))).toBe(false);
 
-    await user.click(within(matrix).getByRole('button', { name: '满足' }));
-
+    await user.click(screen.getByRole('button', { name: '查看采购合同原文依据' }));
     await waitFor(() => {
       const requestedUrls = fetchMock.mock.calls.map(([input]) => String(input));
       expect(requestedUrls.some((url) => url.includes('/api/qmd-documents/preview'))).toBe(true);
@@ -430,7 +481,7 @@ describe('TaskProgressPage', () => {
     });
   });
 
-  it('shows all filtered documents in the condition matrix', async () => {
+  it('shows insight actions on all filtered documents', async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse(multiDocumentSummary))
@@ -451,14 +502,14 @@ describe('TaskProgressPage', () => {
       </MemoryRouter>
     );
 
-    const matrix = await screen.findByRole('table', { name: '条件矩阵' });
-    expect(matrix.getAttribute('style')).toContain('--matrix-columns:');
-    expect(Array.from(matrix.querySelectorAll('.matrix-row')).every((row) => (row as HTMLElement).style.gridTemplateColumns === '')).toBe(true);
-    expect(within(matrix).getByRole('button', { name: '采购合同' })).toBeInTheDocument();
-    expect(within(matrix).getByRole('button', { name: '补充协议' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: '采购合同', level: 3 })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '补充协议', level: 3 })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '查看采购合同条件核验' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '查看补充协议条件核验' })).toBeInTheDocument();
+    expect(screen.queryByRole('table', { name: '条件矩阵' })).not.toBeInTheDocument();
   });
 
-  it('keeps loaded qmd context visible when filtering the selected document out of the list', async () => {
+  it('keeps loaded qmd context visible in the drawer when filtering the selected document out of the list', async () => {
     const user = userEvent.setup();
     const fetchMock = vi
       .fn()
@@ -499,9 +550,8 @@ describe('TaskProgressPage', () => {
       </MemoryRouter>
     );
 
-    const matrix = await screen.findByRole('table', { name: '条件矩阵' });
-    await user.click(within(matrix).getByRole('button', { name: '补充协议' }));
-    await user.click(within(matrix).getByRole('button', { name: '不满足' }));
+    await screen.findByRole('heading', { name: '补充协议', level: 3 });
+    await user.click(screen.getByRole('button', { name: '查看补充协议原文依据' }));
 
     await waitFor(() => expect(screen.getByText('条件：general_match')).toBeInTheDocument());
 
@@ -511,7 +561,10 @@ describe('TaskProgressPage', () => {
     expect(screen.queryByText('请选择一份合同')).not.toBeInTheDocument();
     expect(screen.getByText('条件：general_match')).toBeInTheDocument();
     expect(screen.getByText('补充协议预览摘要')).toBeInTheDocument();
-    expect(screen.getByText('qmd://company_docs/contracts/supplement.md')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '打开原文' })).toHaveAttribute(
+      'href',
+      '/api/qmd-documents/open-link?task_id=task-1&document_uri=qmd%3A%2F%2Fcompany_docs%2Fcontracts%2Fsupplement.md'
+    );
   });
 
   it('shows a visible error when final results fail after completion', async () => {
@@ -566,6 +619,8 @@ describe('TaskProgressPage', () => {
       </MemoryRouter>
     );
 
+    await screen.findByRole('heading', { name: '采购合同', level: 3 });
+    await userEvent.click(screen.getByRole('button', { name: '查看采购合同证据明细' }));
     await waitFor(() => expect(screen.getByText('artifact_ref_only')).toBeInTheDocument());
   });
 
@@ -598,11 +653,14 @@ describe('TaskProgressPage', () => {
       </MemoryRouter>
     );
 
+    await screen.findByRole('heading', { name: '采购合同', level: 3 });
+    await userEvent.click(screen.getByRole('button', { name: '查看采购合同证据明细' }));
     await waitFor(() => expect(screen.getByText('页码未知')).toBeInTheDocument());
     expect(screen.queryByText('第 undefined 页')).not.toBeInTheDocument();
   });
 
-  it('surfaces phase 3 fetch failures without hiding the panels', async () => {
+  it('surfaces phase 3 fetch failures inside the document insight drawer', async () => {
+    const user = userEvent.setup();
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
       if (url === '/api/screening-tasks/task-1') return Promise.resolve(jsonResponse(completedSummary));
@@ -622,12 +680,13 @@ describe('TaskProgressPage', () => {
       </MemoryRouter>
     );
 
-    await screen.findByText('条件矩阵');
-    expect(screen.getByText('证据账本')).toBeInTheDocument();
+    await screen.findByRole('heading', { name: '采购合同', level: 3 });
+    await user.click(screen.getByRole('button', { name: '查看采购合同条件核验' }));
     expect(screen.getByText('condition verdict service unavailable')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('tab', { name: '证据明细' }));
     expect(screen.getByText('ledger service unavailable')).toBeInTheDocument();
-    expect(screen.getByText('暂无条件矩阵')).toBeInTheDocument();
-    expect(screen.getByText('暂无证据账本')).toBeInTheDocument();
+    expect(screen.getByText('暂无证据明细')).toBeInTheDocument();
   });
 
   it('reloads qmd context using the current condition and page target', async () => {
@@ -678,8 +737,9 @@ describe('TaskProgressPage', () => {
       </MemoryRouter>
     );
 
-    const matrix = await screen.findByRole('table', { name: '条件矩阵' });
-    await user.click(within(matrix).getByRole('button', { name: '满足' }));
+    await screen.findByRole('heading', { name: '采购合同', level: 3 });
+    await user.click(screen.getByRole('button', { name: '查看采购合同条件核验' }));
+    await user.click(screen.getByRole('button', { name: /general_match/ }));
 
     await waitFor(() => expect(screen.getByText('条件：general_match')).toBeInTheDocument());
     const evidenceContextUrls = () =>
